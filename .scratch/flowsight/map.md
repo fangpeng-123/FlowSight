@@ -32,10 +32,17 @@ The map is done when these are all decided - enough to start building an MVP:
 - [04 Core architecture](issues/04-core-architecture.md) - **parser skeleton (`ast`+`jedi`, exact/free/scales) + LLM enrichment** (eager module summaries + lazy deep per-function on drill-down), cached per code-hash; skeleton trustworthy, annotations advisory; runtime overlay = actual(viztracer)-on-expected(LLM). Unblocks 05.
 - [05 Graph schema & views](issues/05-graph-schema-views.md) - nodes Module/Function/Class/External/**DomainEntity**(LLM); edges calls/imports/contains/references/produces/consumes/transforms/data_flow; attrs tagged parser(trusted)/LLM(advisory)/runtime(actual); 4 views = data subsets (dependency+runtime-overlay / data-structures=LLM domain entities / contracts / risk list). Unblocks 07.
 
+## Build spec (ready-for-agent)
+
+- **[FlowSight MVP Spec](../../doc/spec/flowsight-mvp-spec.md)** - build-ready PRD synthesized via `/to-spec` from decisions 02–08 + the verified 3D prototype (07) + landscape survey. Status: `ready-for-agent`. Resolves three open items:
+  - **08 (medium) → local web app (browser).** Ship one host first; graph layer stays host-agnostic for a future webview.
+  - **06 (runtime overlay) → viztracer actual-on-expected.** `flowsight trace <cmd>` or `--from <file.json>`; trace events mapped onto skeleton `Function` nodes by file:line / `f_code`; async via viztracer, generators deduped by `f_code`, C-ext out of MVP scope.
+  - **03 (renderer) → 3d-force-graph (supersedes Cytoscape for the MVP).** User preference + verified prototype. 03's framework-agnostic-graph-layer advice retained as a renderer-agnostic data adapter. Pin 3d-force-graph v1.80; no `onNodeDblClick` (detect in `onNodeClick`); overlays outside the graph container; triple-set theme bg.
+
 ## Not yet specified
 
-- **Static↔runtime correlation** - how a captured `viztracer` trace maps onto the parser skeleton (the "actual-on-expected" overlay mechanics). Depends on 06.
-- **Tracing edge cases** - async (only viztracer reconstructs chains), generators (dedupe by `f_code`), C extensions (only py-spy/scalene see native frames). Graduates into a sharper ticket once 06 sets the technique.
+- ~~**Static↔runtime correlation**~~ - resolved by the MVP spec (06 above): viztracer actual-on-LLM-expected, mapped by file:line / `f_code`.
+- **Tracing edge cases** - async (only viztracer reconstructs chains), generators (dedupe by `f_code`), C extensions (only py-spy/scalene see native frames). Async + generators covered by the spec; C-ext deferred (out of MVP scope).
 
 ## Out of scope
 
