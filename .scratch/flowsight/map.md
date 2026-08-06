@@ -39,6 +39,18 @@ The map is done when these are all decided - enough to start building an MVP:
   - **06 (runtime overlay) → viztracer actual-on-expected.** `flowsight trace <cmd>` or `--from <file.json>`; trace events mapped onto skeleton `Function` nodes by file:line / `f_code`; async via viztracer, generators deduped by `f_code`, C-ext out of MVP scope.
   - **03 (renderer) → 3d-force-graph (supersedes Cytoscape for the MVP).** User preference + verified prototype. 03's framework-agnostic-graph-layer advice retained as a renderer-agnostic data adapter. Pin 3d-force-graph v1.80; no `onNodeDblClick` (detect in `onNodeClick`); overlays outside the graph container; triple-set theme bg.
 
+## Build tickets (ready-for-agent)
+
+Tracer-bullet vertical slices implementing the MVP spec, broken via `/to-tickets`. One file per ticket under `tickets/` (build slices), separate from `issues/` (decision tickets 01-08). Work the frontier = any ticket whose blockers are done.
+
+- [01 Skeleton extraction -> graph document](tickets/01-skeleton.md) - data spine. Blocked by: none. **(frontier)**
+- [02 Local serve + 3D static-skeleton render](tickets/02-serve-render.md) - visual spine. Blocked by: 01.
+- [03 LLM enrichment + trust marking + caching](tickets/03-llm-enrichment.md) - meaning layer. Blocked by: 02.
+- [04 Domain entities + four views + search](tickets/04-domain-entities-views.md) - facets. Blocked by: 03.
+- [05 Runtime data-flow overlay](tickets/05-runtime-overlay.md) - runtime truth. Blocked by: 02 (expected-flow comparison enriches after 03/04).
+
+Dependency graph: `01 -> 02 -> 03 -> 04`; `02 -> 05` (runs parallel to 03/04).
+
 ## Not yet specified
 
 - ~~**Static↔runtime correlation**~~ - resolved by the MVP spec (06 above): viztracer actual-on-LLM-expected, mapped by file:line / `f_code`.
