@@ -4,10 +4,10 @@
 
 **Blocked by:** 03 (needs enrichment producing contracts/risks/domain entities).
 
-**Status:** ready-for-agent
+**Status:** implemented (committed in d6d078a alongside concurrent ticket-05 work)
 
-- [ ] LLM infers DomainEntity nodes + produces/consumes/transforms edges from function inputs/outputs (lazy/progressive)
-- [ ] Four view tabs (dependency / data-structures / contracts / risk) each filter the graph to their schema subset
-- [ ] Risk view ranks items by severity
-- [ ] Search covers functions/structs/risks and jumps to the selected node
-- [ ] Data-structures view shows the domain data pipeline (e.g. AudioChunk -> Transcript -> LLMMessage -> TTSAudio)
+- [x] LLM infers DomainEntity nodes + produces/consumes/transforms edges from function inputs/outputs (lazy/progressive)
+- [x] Four view tabs (dependency / data-structures / contracts / risk) each filter the graph to their schema subset
+- [x] Risk view ranks items by severity
+- [x] Search covers functions/structs/risks and jumps to the selected node
+- [x] Data-structures view shows the domain data pipeline (e.g. AudioChunk -> Transcript -> LLMMessage -> TTSAudio)
