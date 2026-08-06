@@ -21,6 +21,9 @@ env/
 .pytest_cache/
 .mypy_cache/
 
+# FlowSight 每项目富化缓存（index/serve 时生成）
+.flowsight/
+
 # Node
 node_modules/
 

@@ -1,0 +1,1 @@
+"""Skeleton extraction package."""

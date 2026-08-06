@@ -13,7 +13,7 @@ FlowSight moved from a verified 3D prototype to a build-ready state. The three p
   - `feea989` MVP spec + map registration
   - `5c03cea` /to-tickets 5 tracer-bullet tickets
 - **Prototype:** `.scratch/flowsight/prototype/index.html` — verified working, 3d-force-graph v1.80. The reference realization of decision 07.
-- **Spec:** `doc/spec/flowsight-mvp-spec.md` — `ready-for-agent`. Synthesizes decisions 02–08 + the verified prototype + landscape survey.
+- **Spec:** `docs/spec/flowsight-mvp-spec.md` — `ready-for-agent`. Synthesizes decisions 02–08 + the verified prototype + landscape survey.
 - **Tickets:** `.scratch/flowsight/tickets/01`–`05` — `ready-for-agent`. Frontier = **01 (skeleton extraction, no blockers)**.
 - **Tracker:** `.scratch/flowsight/map.md` — has `## Build spec (ready-for-agent)` and `## Build tickets (ready-for-agent)` sections listing the dependency graph and frontier.
 - **Memory:** `prototype-verified-dev-phase.md` records the prototype-verified → dev-phase transition.
@@ -56,10 +56,10 @@ These are environment/harness facts, not in the repo — read them:
 
 | Artifact | Path |
 |---|---|
-| MVP spec | `doc/spec/flowsight-mvp-spec.md` |
+| MVP spec | `docs/spec/flowsight-mvp-spec.md` |
 | Build tickets | `.scratch/flowsight/tickets/01`–`05` |
 | Decision tickets | `.scratch/flowsight/issues/01`–`08` |
 | Tracker map | `.scratch/flowsight/map.md` |
 | Prototype | `.scratch/flowsight/prototype/index.html` |
 | Research | `.scratch/flowsight/research/{landscape,python-primitives,graph-viz}.md` |
-| Prior handoffs | `doc/handoff/handoff-2026-08-06-prototype-v{3,4,5c…}.md` |
+| Prior handoffs | `docs/handoff/handoff-2026-08-06-prototype-v{3,4,5c…}.md` |

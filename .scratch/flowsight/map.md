@@ -34,7 +34,7 @@ The map is done when these are all decided - enough to start building an MVP:
 
 ## Build spec (ready-for-agent)
 
-- **[FlowSight MVP Spec](../../doc/spec/flowsight-mvp-spec.md)** - build-ready PRD synthesized via `/to-spec` from decisions 02–08 + the verified 3D prototype (07) + landscape survey. Status: `ready-for-agent`. Resolves three open items:
+- **[FlowSight MVP Spec](../../docs/spec/flowsight-mvp-spec.md)** - build-ready PRD synthesized via `/to-spec` from decisions 02–08 + the verified 3D prototype (07) + landscape survey. Status: `ready-for-agent`. Resolves three open items:
   - **08 (medium) → local web app (browser).** Ship one host first; graph layer stays host-agnostic for a future webview.
   - **06 (runtime overlay) → viztracer actual-on-expected.** `flowsight trace <cmd>` or `--from <file.json>`; trace events mapped onto skeleton `Function` nodes by file:line / `f_code`; async via viztracer, generators deduped by `f_code`, C-ext out of MVP scope.
   - **03 (renderer) → 3d-force-graph (supersedes Cytoscape for the MVP).** User preference + verified prototype. 03's framework-agnostic-graph-layer advice retained as a renderer-agnostic data adapter. Pin 3d-force-graph v1.80; no `onNodeDblClick` (detect in `onNodeClick`); overlays outside the graph container; triple-set theme bg.

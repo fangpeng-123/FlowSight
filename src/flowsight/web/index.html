@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<title>FlowSight · 代码库知识图谱</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <div class="search">
+      <span class="ico">⌕</span>
+      <input id="search-input" placeholder="搜索 文件/类/函数/模块/外部依赖…" autocomplete="off" />
+      <div class="search-results" id="search-results"></div>
+    </div>
+    <div class="dim-tabs">
+      <div class="dim-tab active" data-dim="dep"><span class="dot" style="background:#6b7480"></span>依赖</div>
+      <div class="dim-tab" data-dim="ctr"><span class="dot" style="background:#5b8def"></span>契约</div>
+      <div class="dim-tab" data-dim="ds"><span class="dot" style="background:#f0a03b"></span>数据结构</div>
+      <div class="dim-tab" data-dim="risk"><span class="dot" style="background:#ef4444"></span>风险</div>
+    </div>
+    <div class="toggles">
+      <button class="tbtn" id="reindex-btn" title="重新索引">↻ 索引</button>
+      <button class="tbtn" id="theme-toggle" title="切换明暗主题">🌙 暗色</button>
+      <button class="tbtn" id="panel-toggle" title="收起/展开侧栏">⇥ 侧栏</button>
+    </div>
+  </div>
+  <div id="main">
+    <div id="cy"></div>
+    <div id="panel">
+      <div id="panel-head">
+        <h1 id="project-title">FlowSight</h1>
+        <div class="sub" id="project-sub">加载中…</div>
+        <div class="sel" id="sel-info">未选中节点 · 显示项目总览</div>
+      </div>
+      <div id="panel-content"></div>
+    </div>
+    <!-- overlays live in #main, not #cy: 3d-force-graph clears #cy (innerHTML="") -->
+    <div id="legend">
+      <div class="lg"><span class="n" style="background:var(--c-mod)"></span>模块</div>
+      <div class="lg"><span class="n" style="background:var(--c-file)"></span>文件</div>
+      <div class="lg"><span class="n" style="background:var(--c-cls)"></span>类</div>
+      <div class="lg"><span class="n" style="background:var(--c-func)"></span>函数</div>
+      <div class="lg"><span class="n" style="background:var(--c-ext)"></span>外部依赖</div>
+      <div class="lg"><span class="n" style="background:var(--c-risk)"></span>风险函数</div>
+    </div>
+    <div class="hint">单击查看 · 双击展开/收起 · 拖拽旋转 · 滚轮缩放</div>
+    <div id="status"><div class="spin"></div><div id="status-text">正在加载 3D 引擎…</div></div>
+  </div>
+</div>
+
+<!-- ESM 主路径：importmap 共享 three 实例；失败回退本地 UMD（lib/）-->
+<script type="importmap">
+{ "imports": { "three": "https://esm.sh/three@0.183.0", "three/": "https://esm.sh/three@0.183.0/" } }
+</script>
+<script type="module">
+  const ET=15000;
+  const wt=(p,ms,l)=>Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error(l+' timeout')),ms))]);
+  try{
+    window.THREE=await wt(import('three'),ET,'three');
+    const fg=await wt(import('https://esm.sh/3d-force-graph@1.80.0?external=three'),ET,'3d-force-graph');
+    window.ForceGraph3D=fg.default;
+    try{window.SpriteText=(await wt(import('https://esm.sh/three-spritetext@1.10.0?external=three'),10000,'spritetext')).default;}catch(e){console.warn('[FlowSight] three-spritetext 加载失败，用手写标签兜底',e);}
+    window.__esmOK=true;
+  }catch(e){console.warn('[FlowSight] ESM(esm.sh) 加载失败，回退到本地 UMD 引擎：',e);}
+  window.dispatchEvent(new Event('engines-ready'));
+</script>
+<!-- UMD fallback: if ESM failed, load local lib/ engines via classic scripts -->
+<script>
+  function loadScript(urls,i,done){if(i>=urls.length){done(false);return;}const s=document.createElement('script');s.src=urls[i];s.onload=()=>done(true);s.onerror=()=>loadScript(urls,i+1,done);document.head.appendChild(s);}
+  function bootLoader(){
+    document.getElementById('status-text').textContent='加载 three.js (1/2)…';
+    loadScript(['lib/three.min.js'],0,ok=>{if(!ok){document.getElementById('status-text').innerHTML='three.js 加载失败，请刷新。';return;}
+      document.getElementById('status-text').textContent='加载 3D 引擎 (2/2)…';
+      loadScript(['lib/3d-force-graph.min.js'],0,ok2=>{if(!ok2){document.getElementById('status-text').innerHTML='3D 引擎加载失败，请刷新。';return;}
+        window.dispatchEvent(new Event('engines-ready'));});
+    });
+  }
+  window.addEventListener('engines-ready',()=>{ if(!window.__esmOK && typeof ForceGraph3D==='undefined'){ bootLoader(); } });
+</script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
