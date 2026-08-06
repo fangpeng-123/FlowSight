@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="zh" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<title>FlowSight · 知识图谱原型 v5b（3D · 分层钻取 · 节点标签）</title>
+<!-- 3D 引擎运行时加载，多 CDN 回退（国内优先 npmmirror），见文末 bootLoader -->
+<style>
+  :root, [data-theme="dark"]{
+    --bg:#000; --panel:#0b0e13; --panel-2:#12161d; --line:#222a35;
+    --txt:#dce3ec; --txt-dim:#9aa4b2; --txt-mute:#565e6a;
+    --tb-bg:#12161d; --tb-border:#2a3340;
+    --sr-hover:#161b23; --sr-border:#222a35;
+    --shadow:0 6px 24px rgba(0,0,0,.5);
+  }
+  [data-theme="light"]{
+    --bg:#eef1f5; --panel:#ffffff; --panel-2:#f4f6f9; --line:#e1e6ed;
+    --txt:#1a1f26; --txt-dim:#5a636f; --txt-mute:#9aa3ad;
+    --tb-bg:#ffffff; --tb-border:#e1e6ed;
+    --sr-hover:#eef2f7; --sr-border:#e1e6ed;
+    --shadow:0 6px 20px rgba(20,30,50,.12);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
+    font-family:"Segoe UI",-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    overflow:hidden;font-size:13px;line-height:1.5;}
+  #app{display:flex;flex-direction:column;height:100%;}
+
+  /* 顶栏：正常文档流实心栏，绝不被画布盖住 */
+  #topbar{flex:0 0 52px;display:flex;align-items:center;gap:12px;padding:0 14px;
+    background:var(--tb-bg);border-bottom:1px solid var(--tb-border);z-index:50;}
+  .search{position:relative;width:300px;}
+  .search input{width:100%;height:34px;border-radius:8px;border:1px solid var(--tb-border);
+    background:var(--panel-2);color:var(--txt);padding:0 12px 0 32px;font-size:12.5px;outline:none;}
+  .search input::placeholder{color:var(--txt-mute);}
+  .search input:focus{border-color:#3b82f6;}
+  .search .ico{position:absolute;left:10px;top:8px;color:var(--txt-mute);font-size:14px;}
+  .search-results{position:absolute;top:38px;left:0;right:0;max-height:340px;overflow-y:auto;
+    background:var(--panel);border:1px solid var(--sr-border);border-radius:8px;box-shadow:var(--shadow);display:none;z-index:200;}
+  .sr-item{padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--sr-border);}
+  .sr-item:last-child{border-bottom:none;}
+  .sr-item:hover{background:var(--sr-hover);}
+  .sr-tag{display:inline-block;font-size:10px;padding:1px 6px;border-radius:6px;margin-right:8px;color:#fff;background:#4b5563;vertical-align:1px;}
+  .sr-label{font-weight:600;color:var(--txt);}
+  .sr-sub{display:block;font-size:11px;color:var(--txt-mute);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .sr-empty{padding:10px 12px;color:var(--txt-mute);font-size:12px;font-style:italic;}
+
+  .dim-tabs{flex:1;display:flex;justify-content:center;gap:6px;}
+  .dim-tab{padding:6px 14px;border-radius:7px;cursor:pointer;color:var(--txt-dim);font-size:12px;
+    border:1px solid transparent;background:var(--panel-2);transition:.15s;white-space:nowrap;}
+  .dim-tab:hover{color:var(--txt);}
+  .dim-tab.active{color:#fff;background:#2b3340;border-color:#3b82f6;}
+  [data-theme="light"] .dim-tab.active{color:#fff;background:#1f2937;}
+  .dim-tab .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:1px;}
+
+  .toggles{display:flex;gap:8px;}
+  .tbtn{height:34px;min-width:34px;padding:0 12px;border-radius:8px;cursor:pointer;color:var(--txt);
+    background:var(--panel-2);border:1px solid var(--tb-border);font-size:12.5px;}
+  .tbtn:hover{border-color:#3b82f6;}
+
+  /* 主区：图 | 侧栏 */
+  #main{flex:1;display:flex;min-height:0;position:relative;}
+  #cy{flex:1;position:relative;overflow:hidden;}
+  #cy canvas{position:absolute!important;top:0!important;left:0!important;z-index:0!important;}
+
+  #legend{position:absolute;bottom:14px;left:14px;z-index:10;background:var(--tb-bg);
+    border:1px solid var(--tb-border);border-radius:8px;padding:8px 12px;font-size:11px;}
+  #legend .lg{display:flex;align-items:center;gap:7px;color:var(--txt-dim);margin:3px 0;}
+  #legend .lg .n{width:10px;height:10px;border-radius:50%;}
+  .hint{position:absolute;bottom:14px;right:14px;z-index:10;color:var(--txt-mute);font-size:11px;pointer-events:none;}
+  #status{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;
+    color:var(--txt-dim);font-size:14px;text-align:center;padding:40px;z-index:5;pointer-events:none;gap:10px;}
+  #status .spin{width:26px;height:26px;border:3px solid var(--line);border-top-color:#3b82f6;border-radius:50%;animation:sp 1s linear infinite;}
+  @keyframes sp{to{transform:rotate(360deg);}}
+
+  #panel{width:392px;min-width:392px;background:var(--panel);border-left:1px solid var(--line);
+    overflow-y:auto;transition:margin .25s,background .2s;position:relative;z-index:10;}
+  #panel.collapsed{margin-right:-392px;}
+  #panel-head{position:sticky;top:0;background:var(--panel);z-index:5;padding:16px 18px 12px;border-bottom:1px solid var(--line);}
+  #panel-head h1{margin:0;font-size:14px;font-weight:600;letter-spacing:.3px;}
+  #panel-head .sub{color:var(--txt-mute);font-size:11px;margin-top:3px;}
+  #panel-head .sel{margin-top:8px;font-size:11px;color:var(--txt-dim);}
+  #panel-head .sel b{color:var(--txt);}
+  .crumb{font-size:11px;color:var(--txt-mute);margin-top:6px;word-break:break-all;}
+  .crumb b{color:var(--txt-dim);}
+
+  .sec{border-bottom:1px solid var(--line);padding:14px 18px;}
+  .sec h2{margin:0 0 10px;font-size:11px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;
+    color:var(--txt-dim);display:flex;align-items:center;gap:8px;}
+  .sec h2 .dot{width:8px;height:8px;border-radius:50%;}
+  .sec.highlight{background:var(--panel-2);}
+  .card{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:8px;}
+  .card:last-child{margin-bottom:0;}
+  .card .t{font-weight:600;color:var(--txt);font-size:12.5px;display:flex;justify-content:space-between;align-items:center;}
+  .kv{display:flex;gap:8px;margin-top:5px;font-size:11.5px;}
+  .kv .k{color:var(--txt-mute);min-width:46px;flex:none;}
+  .kv .v{color:var(--txt);word-break:break-all;}
+  .row{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:6px;cursor:pointer;font-size:12px;color:var(--txt-dim);}
+  .row:hover{background:var(--panel-2);color:var(--txt);}
+  .row .n{width:7px;height:7px;border-radius:50%;flex:none;}
+  .row .arr{color:var(--txt-mute);font-size:10px;margin-left:auto;}
+  .pill{display:inline-block;font-size:10px;padding:1px 6px;border-radius:8px;margin-left:6px;border:1px solid;}
+  .empty{color:var(--txt-mute);font-size:11.5px;font-style:italic;}
+  .exp-btn{margin-top:8px;width:100%;padding:6px;border-radius:6px;border:1px solid var(--line);background:var(--panel-2);
+    color:var(--txt-dim);cursor:pointer;font-size:12px;}
+  .exp-btn:hover{color:var(--txt);border-color:#3b82f6;}
+  .params{font-family:"SFMono-Regular",Consolas,Menlo,monospace;font-size:11px;color:var(--txt);background:var(--bg);
+    border:1px solid var(--line);border-radius:6px;padding:6px 9px;margin-top:5px;}
+  [data-theme="light"] .params{background:#fff;}
+
+  #panel::-webkit-scrollbar,.search-results::-webkit-scrollbar{width:8px;}
+  #panel::-webkit-scrollbar-thumb,.search-results::-webkit-scrollbar-thumb{background:#2a313c;border-radius:4px;}
+  [data-theme="light"] #panel::-webkit-scrollbar-thumb,[data-theme="light"] .search-results::-webkit-scrollbar-thumb{background:#cbd2dc;}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <div class="search">
+      <span class="ico">⌕</span>
+      <input id="search-input" placeholder="搜索 文件/类/函数/参数/结构体/风险…" autocomplete="off" />
+      <div class="search-results" id="search-results"></div>
+    </div>
+    <div class="dim-tabs">
+      <div class="dim-tab active" data-dim="dep"><span class="dot" style="background:#6b7480"></span>依赖</div>
+      <div class="dim-tab" data-dim="ds"><span class="dot" style="background:#f0a03b"></span>数据结构</div>
+      <div class="dim-tab" data-dim="ctr"><span class="dot" style="background:#5b8def"></span>契约</div>
+      <div class="dim-tab" data-dim="risk"><span class="dot" style="background:#ef4444"></span>风险</div>
+    </div>
+    <div class="toggles">
+      <button class="tbtn" id="theme-toggle" title="切换明暗主题">🌙 暗色</button>
+      <button class="tbtn" id="panel-toggle" title="收起/展开侧栏">⇥ 侧栏</button>
+    </div>
+  </div>
+  <div id="main">
+    <div id="cy"></div>
+    <div id="panel">
+      <div id="panel-head">
+        <h1>FlowSight</h1>
+        <div class="sub">voice-agent · 示例项目知识图谱</div>
+        <div class="sel" id="sel-info">未选中节点 · 显示项目总览</div>
+      </div>
+      <div id="panel-content"></div>
+    </div>
+    <!-- 浮层放在 #main 而非 #cy：3d-force-graph 构造会清空 #cy(innerHTML="")，放这里永不被清，图例/提示/加载态始终在画布之上 -->
+    <div id="legend">
+      <div class="lg"><span class="n" style="background:var(--c-mod)"></span>模块</div>
+      <div class="lg"><span class="n" style="background:var(--c-file)"></span>文件</div>
+      <div class="lg"><span class="n" style="background:var(--c-cls)"></span>类</div>
+      <div class="lg"><span class="n" style="background:var(--c-ent)"></span>结构体/数据类</div>
+      <div class="lg"><span class="n" style="background:var(--c-func)"></span>函数</div>
+      <div class="lg"><span class="n" style="background:var(--c-risk)"></span>风险函数</div>
+    </div>
+    <div class="hint">单击查看 · 双击展开/收起 · 拖拽旋转 · 滚轮缩放</div>
+    <div id="status"><div class="spin"></div><div id="status-text">正在加载 3D 引擎…</div></div>
+  </div>
+</div>
+
+<!-- ESM 主路径：importmap 让 three / 3d-force-graph / three-spritetext 共享同一个 three 实例，消除“Multiple instances of Three.js”跨实例警告，标签必渲染 -->
+<script type="importmap">
+{ "imports": { "three": "https://esm.sh/three@0.183.0", "three/": "https://esm.sh/three@0.183.0/" } }
+</script>
+<script type="module">
+  // 顶级 await：依次拉取 three、3d-force-graph、three-spritetext（均 ?external=three 走 importmap 共享实例）
+  const ET=15000;
+  const wt=(p,ms,l)=>Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error(l+' timeout')),ms))]);
+  try{
+    window.THREE=await wt(import('three'),ET,'three');
+    const fg=await wt(import('https://esm.sh/3d-force-graph@1.80.0?external=three'),ET,'3d-force-graph');
+    window.ForceGraph3D=fg.default;
+    try{window.SpriteText=(await wt(import('https://esm.sh/three-spritetext@1.10.0?external=three'),10000,'spritetext')).default;}catch(e){console.warn('[FlowSight] three-spritetext 加载失败，用手写标签兜底',e);}
+    window.__esmOK=true;
+  }catch(e){console.warn('[FlowSight] ESM(esm.sh) 加载失败，回退到本地 UMD 引擎：',e);}
+  window.dispatchEvent(new Event('engines-ready'));
+</script>
+<script>
+/* ============ 数据：模块 > 文件 > 类/函数；结构体(dataclass) > 字段 ============ */
+const modules = [
+  {id:'m_audio_in', label:'audio_in', summary:'麦克风采集 + VAD + 端点检测，产出 AudioChunk 与 utterance 事件'},
+  {id:'m_asr',      label:'asr',      summary:'流式语音识别，AudioChunk -> Transcript'},
+  {id:'m_llm',      label:'llm',      summary:'大模型对话推理，Transcript -> LLMMessage'},
+  {id:'m_tts',      label:'tts',      summary:'语音合成，LLMMessage -> TTSAudio'},
+  {id:'m_audio_out',label:'audio_out',summary:'音频播放与设备管理'},
+];
+const files = [
+  {id:'f_stream', mod:'m_audio_in', label:'stream.py', path:'audio_in/stream.py'},
+  {id:'f_vad',    mod:'m_audio_in', label:'vad.py',    path:'audio_in/vad.py'},
+  {id:'f_asr',    mod:'m_asr',      label:'transcribe.py', path:'asr/transcribe.py'},
+  {id:'f_llm',    mod:'m_llm',      label:'generate.py', path:'llm/generate.py'},
+  {id:'f_tts',    mod:'m_tts',      label:'synthesize.py', path:'tts/synthesize.py'},
+  {id:'f_play',   mod:'m_audio_out',label:'play.py',   path:'audio_out/play.py'},
+];
+const classes = [
+  {id:'c_vad',  file:'f_vad',  label:'VADDetector'},
+  {id:'c_llm',  file:'f_llm',  label:'LLMClient'},
+  {id:'c_play', file:'f_play', label:'Player'},
+];
+const structs = [
+  {id:'s_AudioChunk', file:'f_stream', label:'AudioChunk', kind:'@dataclass',
+   fields:[{n:'pcm',t:'bytes'},{n:'sample_rate',t:'int'},{n:'frame_ms',t:'int'}],
+   producedBy:['fn_receive_chunk'], consumedBy:['fn_vad_detect','fn_transcribe'], transformsTo:'s_Transcript'},
+  {id:'s_Transcript', file:'f_asr', label:'Transcript', kind:'@dataclass',
+   fields:[{n:'text',t:'str'},{n:'is_final',t:'bool'},{n:'lang',t:'str'}],
+   producedBy:['fn_transcribe'], consumedBy:['fn_generate'], transformsTo:'s_LLMMessage'},
+  {id:'s_LLMMessage', file:'f_llm', label:'LLMMessage', kind:'@dataclass',
+   fields:[{n:'role',t:'str'},{n:'content',t:'str'},{n:'context',t:'list'}],
+   producedBy:['fn_generate'], consumedBy:['fn_synthesize'], transformsTo:'s_TTSAudio'},
+  {id:'s_TTSAudio', file:'f_tts', label:'TTSAudio', kind:'@dataclass',
+   fields:[{n:'pcm',t:'bytes'},{n:'sample_rate',t:'int'},{n:'duration',t:'float'}],
+   producedBy:['fn_synthesize'], consumedBy:['fn_play'], transformsTo:'-'},
+];
+const funcs = [
+  {id:'fn_receive_chunk', file:'f_stream', cls:null, label:'receive_chunk', purpose:'接收麦克风音频帧',
+    params:[{n:'frame',t:'bytes'}], returns:'AudioChunk',
+    contract:{inputs:'frame: bytes',outputs:'chunk: AudioChunk',errors:'AudioUnderrun',boundaries:'sample_rate=16000, frame_ms=20, 非阻塞'}},
+  {id:'fn_vad_detect', file:'f_vad', cls:'c_vad', label:'detect', purpose:'语音活动检测',
+    params:[{n:'chunk',t:'AudioChunk'}], returns:'bool',
+    contract:{inputs:'chunk: AudioChunk',outputs:'is_speech: bool',errors:'-',boundaries:'threshold=0.5, min_speech_ms=200'},
+    risk:{cat:'边界检测',sev:'高',desc:'VAD 阈值不当导致截断或漏判语音',avoid:'尾音静音窗口 + 最大录音时长兜底'}},
+  {id:'fn_is_utterance_end', file:'f_vad', cls:null, label:'is_utterance_end', purpose:'判定一句话结束',
+    params:[{n:'is_speech',t:'bool'},{n:'chunk',t:'AudioChunk'}], returns:'bool',
+    contract:{inputs:'is_speech: bool, chunk',outputs:'end: bool',errors:'-',boundaries:'silence_ms=600, max_utterance=15s'},
+    risk:{cat:'完成检测',sev:'高',desc:'静音窗口误判导致提前或滞后结束',avoid:'silence_ms 可调 + 双重确认机制'}},
+  {id:'fn_transcribe', file:'f_asr', cls:null, label:'transcribe', purpose:'流式语音识别',
+    params:[{n:'chunks',t:'AudioChunk[]'}], returns:'Transcript',
+    contract:{inputs:'chunks: AudioChunk[]',outputs:'transcript: Transcript',errors:'ASRTimeout',boundaries:'streaming=true, partial 每 200ms'},
+    risk:{cat:'流式延迟',sev:'中',desc:'流式截断导致尾词丢失',avoid:'final 重述 + 尾部缓冲'}},
+  {id:'fn_generate', file:'f_llm', cls:'c_llm', label:'generate', purpose:'LLM 对话生成',
+    params:[{n:'transcript',t:'Transcript'}], returns:'LLMMessage',
+    contract:{inputs:'transcript: Transcript',outputs:'msg: LLMMessage',errors:'LLMRateLimit',boundaries:'max_tokens=512, temp=0.7, 流式'},
+    risk:{cat:'成本/延迟',sev:'中',desc:'超时与费用失控',avoid:'max_tokens 上限 + 流式 + 语义缓存'}},
+  {id:'fn_synthesize', file:'f_tts', cls:null, label:'synthesize', purpose:'文本转语音',
+    params:[{n:'msg',t:'LLMMessage'}], returns:'TTSAudio',
+    contract:{inputs:'msg: LLMMessage',outputs:'audio: TTSAudio',errors:'TTSFailure',boundaries:'voice=default, sample_rate=24000'},
+    risk:{cat:'播放欠载',sev:'中',desc:'合成慢导致播放卡顿',avoid:'预生成首句 + 队列缓冲'}},
+  {id:'fn_play', file:'f_play', cls:'c_play', label:'play', purpose:'播放音频块',
+    params:[{n:'audio',t:'TTSAudio'}], returns:'void',
+    contract:{inputs:'audio: TTSAudio',outputs:'-',errors:'AudioDeviceBusy',boundaries:'非阻塞, 队列播放'}},
+];
+const callEdges = [
+  ['fn_receive_chunk','fn_vad_detect'],['fn_vad_detect','fn_is_utterance_end'],
+  ['fn_is_utterance_end','fn_transcribe'],['fn_transcribe','fn_generate'],
+  ['fn_generate','fn_synthesize'],['fn_synthesize','fn_play'],
+];
+const mod=id=>modules.find(m=>m.id===id);
+const fil=id=>files.find(f=>f.id===id);
+const cls=id=>classes.find(c=>c.id===id);
+const st =id=>structs.find(s=>s.id===id);
+const fn =id=>funcs.find(f=>f.id===id);
+
+/* ============ 主题 ============ */
+const THEMES={
+  dark:{graphBg:'#000000',label:'#c2cad6',
+    mod:'#2dd4bf',file:'#38bdf8',cls:'#a78bfa',ent:'#f0a03b',func:'#5b8def',risk:'#ef4444',
+    call:'#4a5260',contains:'#23282f',flow:'#ffc107',dim:'#1e232b',dimLink:'#15191f'},
+  light:{graphBg:'#eef1f5',label:'#2a3140',
+    mod:'#0d9488',file:'#0284c7',cls:'#7c3aed',ent:'#d97706',func:'#2563eb',risk:'#dc2626',
+    call:'#94a3b8',contains:'#cbd5e1',flow:'#c2410c',dim:'#dde2ea',dimLink:'#e6eaf0'}
+};
+let theme='dark';
+const T=()=>THEMES[theme];
+function syncLegendVars(){const r=document.documentElement.style;
+  r.setProperty('--c-mod',T().mod);r.setProperty('--c-file',T().file);r.setProperty('--c-cls',T().cls);
+  r.setProperty('--c-ent',T().ent);r.setProperty('--c-func',T().func);r.setProperty('--c-risk',T().risk);}
+
+/* ============ 全量节点/边 ============ */
+const allNodes=[];
+modules.forEach(m=>allNodes.push({id:m.id,label:m.label,type:'module'}));
+files.forEach(f=>allNodes.push({id:f.id,label:f.label,type:'file',mod:f.mod}));
+classes.forEach(c=>allNodes.push({id:c.id,label:c.label,type:'class',file:c.file}));
+structs.forEach(s=>allNodes.push({id:s.id,label:s.label,type:'struct',file:s.file}));
+funcs.forEach(f=>allNodes.push({id:f.id,label:f.label,type:'function',file:f.file,cls:f.cls,hasRisk:!!f.risk}));
+const nodeById=Object.fromEntries(allNodes.map(n=>[n.id,n]));
+const allLinks=[];
+files.forEach(f=>allLinks.push({source:f.mod,target:f.id,type:'contains'}));
+classes.forEach(c=>allLinks.push({source:c.file,target:c.id,type:'contains'}));
+funcs.forEach(f=>allLinks.push({source:f.cls||f.file,target:f.id,type:'contains'}));
+structs.forEach(s=>allLinks.push({source:s.file,target:s.id,type:'contains'}));
+callEdges.forEach(([s,t])=>allLinks.push({source:s,target:t,type:'calls'}));
+structs.forEach(s=>{
+  s.producedBy.forEach(p=>allLinks.push({source:p,target:s.id,type:'produces'}));
+  s.consumedBy.forEach(c=>allLinks.push({source:s.id,target:c,type:'consumes'}));
+  if(s.transformsTo&&s.transformsTo!=='-')allLinks.push({source:s.id,target:s.transformsTo,type:'transforms'});
+});
+const FLOW=['produces','consumes','transforms'];
+
+/* ============ 展开状态（默认展开模块 -> 露出文件）============ */
+const expanded=new Set(modules.map(m=>m.id));
+function parentOf(n){if(n.type==='file')return n.mod;if(n.type==='class')return n.file;if(n.type==='function')return n.cls||n.file;if(n.type==='struct')return n.file;return null;}
+function isVisible(n){
+  if(n.type==='module'||n.type==='struct')return true;
+  if(n.type==='file')return expanded.has(n.mod);
+  if(n.type==='class')return expanded.has(n.file);
+  if(n.type==='function')return expanded.has(n.cls||n.file);
+  return true;
+}
+function isVisibleById(id){const n=nodeById[id];return n?isVisible(n):false;}
+
+/* ============ 选择 / 维度 ============ */
+let selectedId=null,neighSet=new Set(),curDim='dep';
+const DIM={
+  dep:{nodeOk:()=>true,linkOk:()=>true},
+  ds:{nodeOk:n=>n.type==='struct'||n.type==='function',linkOk:l=>FLOW.includes(l.type)},
+  ctr:{nodeOk:n=>['function','file','class'].includes(n.type),linkOk:l=>['calls','contains'].includes(l.type)},
+  risk:{nodeOk:n=>!!n.hasRisk,linkOk:()=>false}
+};
+function neighbors(id){const s=new Set([id]);allLinks.forEach(l=>{if(l.source===id)s.add(l.target);if(l.target===id)s.add(l.source);});return s;}
+function nodeLit(n){if(selectedId)return neighSet.has(n.id);return DIM[curDim].nodeOk(n);}
+function linkLit(l){if(selectedId)return l.source===selectedId||l.target===selectedId;return DIM[curDim].linkOk(l);}
+
+/* ============ 3D 图谱 ============ */
+let Graph=null;
+let _dcId=null,_dcT=0; // 单击/双击判定（3d-force-graph v1.80 无 onNodeDblClick，用 onNodeClick 内自测双击）
+function nodeBaseColor(n){switch(n.type){case 'module':return T().mod;case 'file':return T().file;case 'class':return T().cls;case 'struct':return T().ent;default:return n.hasRisk?T().risk:T().func;}}
+function nodeColor(n){return nodeLit(n)?nodeBaseColor(n):T().dim;}
+function linkColor(l){if(!linkLit(l))return T().dimLink;return l.type==='contains'?T().contains:l.type==='calls'?T().call:T().flow;}
+function linkWidth(l){if(!linkLit(l))return 0.4;return l.type==='contains'?0.7:l.type==='calls'?1.2:l.type==='transforms'?3:1.8;}
+function nodeVal(n){if(n.type==='module')return 3.5;if(n.type==='file')return 2.5;if(n.type==='class')return 2;if(n.type==='struct')return 2.5;return n.hasRisk?1.9:1.5;}
+
+/* 节点标签：优先 SpriteText，否则用 3d-force-graph 自带 THREE 手写 canvas 纹理精灵 */
+function makeCanvasSprite(text,color,h){
+  const cvs=document.createElement('canvas');
+  const ctx=cvs.getContext('2d');const fs=64;
+  ctx.font=fs+'px "Segoe UI",sans-serif';
+  const w=Math.ceil(ctx.measureText(text).width)+24;
+  cvs.width=w;cvs.height=fs+24;
+  ctx.font=fs+'px "Segoe UI",sans-serif';
+  ctx.fillStyle=color;ctx.textBaseline='middle';ctx.textAlign='left';
+  ctx.fillText(text,12,cvs.height/2);
+  const tex=new THREE.CanvasTexture(cvs);tex.minFilter=THREE.LinearFilter;tex.magFilter=THREE.LinearFilter;
+  const mat=new THREE.SpriteMaterial({map:tex,transparent:true,depthWrite:false});
+  const sp=new THREE.Sprite(mat);
+  const bw=h*1.5;sp.scale.set(bw*(w/cvs.height),bw,1);
+  return sp;
+}
+function labelObj(n){
+  const color=(selectedId&&n.id===selectedId)?'#ffffff':(nodeLit(n)?T().label:T().dimLink);
+  const h=n.type==='module'?3.6:(n.type==='file'||n.type==='struct')?2.8:2.2;
+  const y=-(nodeVal(n)*2.4)-4;
+  // 优先用 SpriteText（若加载成功，文字最清晰）
+  if(typeof SpriteText!=='undefined'){const s=new SpriteText(n.label);s.color=color;s.textHeight=h;s.padding=1;s.position.y=y;return s;}
+  // 否则用 3d-force-graph 自带 THREE 手写 canvas 纹理精灵（不依赖第二个库）
+  if(typeof THREE!=='undefined'){const sp=makeCanvasSprite(n.label,color,h);sp.position.y=y;return sp;}
+  return null;
+}
+function arrowLen(l){return l.type==='contains'?0:l.type==='transforms'?6.5:l.type==='calls'?3.2:4.5;}
+function particles(l){return l.type==='transforms'?5:(l.type==='produces'||l.type==='consumes')?3:0;}
+
+function visibleData(){const visN=allNodes.filter(isVisible);const visL=allLinks.filter(l=>isVisibleById(l.source)&&isVisibleById(l.target));return {nodes:visN,links:visL};}
+function initGraph(){
+  if(typeof ForceGraph3D==='undefined'){setStatus('3D 引擎未就绪，请刷新重试。',true);return;}
+  const d=visibleData();
+  Graph=ForceGraph3D()(document.getElementById('cy'))
+    .graphData({nodes:d.nodes.map(n=>({...n})),links:d.links.map(l=>({...l}))})
+    .backgroundColor(T().graphBg)
+    .nodeRelSize(5)
+    .nodeVal(nodeVal).nodeColor(nodeColor)
+    .nodeLabel(n=>n.label+(n.hasRisk?' ⚠':''))
+    .nodeThreeObjectExtend(true).nodeThreeObject(labelObj)
+    .linkColor(linkColor).linkWidth(linkWidth)
+    .linkDirectionalArrowLength(arrowLen).linkDirectionalArrowRelPos(1)
+    .linkDirectionalParticles(particles).linkDirectionalParticleWidth(1)
+    .linkDirectionalParticleSpeed(0.01)
+    .linkDirectionalParticleColor(()=>T().flow)
+    .onNodeClick(n=>{const now=Date.now();if(_dcId===n.id&&now-_dcT<350){_dcId=null;toggleExpand(n.id);return;}_dcId=n.id;_dcT=now;selectNode(n.id);})
+    .onBackgroundClick(()=>clearSelection());
+  Graph.d3Force('link').distance(l=>l.type==='contains'?11:32).strength(l=>l.type==='contains'?0.7:0.22);
+  Graph.d3Force('charge').strength(-100);
+  Graph.d3VelocityDecay(0.35);
+  Graph.onEngineStop(()=>Graph.zoomToFit(400,40));
+  applyGraphBg();
+  const stEl=document.getElementById('status'); if(stEl) stEl.style.display='none';
+}
+function rebuild(){
+  if(!Graph)return;
+  const oldPos={};try{Graph.graphData().nodes.forEach(n=>{oldPos[n.id]={x:n.x,y:n.y,z:n.z};});}catch(e){}
+  const d=visibleData();
+  d.nodes.forEach(n=>{if(oldPos[n.id]){n.x=oldPos[n.id].x;n.y=oldPos[n.id].y;n.z=oldPos[n.id].z;}else{const p=parentOf(n);const o=p&&oldPos[p];if(o){n.x=o.x+(Math.random()*8-4);n.y=o.y+(Math.random()*8-4);n.z=o.z+(Math.random()*8-4);}}});
+  Graph.graphData({nodes:d.nodes.map(n=>({...n})),links:d.links.map(l=>({...l}))});
+  Graph.refresh();
+}
+function applyGraphBg(){
+  if(!Graph)return;
+  const c=T().graphBg;
+  Graph.backgroundColor(c);
+  // 三重兜底，确保主题切换时画布底色必然更新（不依赖 backgroundColor 的刷新时机）：
+  // 1) 直接写渲染器 clearColor；2) scene.background（渲染器每帧绘制）；3) 画布 CSS 底色。
+  try{const r=Graph.renderer&&Graph.renderer();if(r){r.setClearColor(new THREE.Color(c),1);if(r.domElement)r.domElement.style.backgroundColor=c;}}catch(e){}
+  try{const sc=Graph.scene();if(sc)sc.background=new THREE.Color(c);}catch(e){}
+}
+function refreshGraph(){if(!Graph)return;applyGraphBg();Graph.nodeColor(nodeColor).nodeThreeObject(labelObj).linkColor(linkColor).linkWidth(linkWidth).linkDirectionalParticleColor(()=>T().flow);try{Graph.resumeAnimation&&Graph.resumeAnimation();}catch(e){}Graph.refresh();}
+function flyTo(id){if(!Graph)return;const n=Graph.graphData().nodes.find(x=>x.id===id);if(!n)return;const d=80;Graph.cameraPosition({x:n.x+d,y:n.y+d*0.5,z:n.z+d},{x:n.x,y:n.y,z:n.z},800);}
+
+/* ============ 选择 / 展开 / 维度 ============ */
+function selectNode(id){closeSearch();document.querySelectorAll('.dim-tab').forEach(t=>t.classList.remove('active'));curDim='dep';selectedId=id;neighSet=neighbors(id);refreshGraph();flyTo(id);renderPanel(id);}
+function clearSelection(){selectedId=null;neighSet=new Set();document.querySelectorAll('.dim-tab').forEach(t=>t.classList.toggle('active',t.dataset.dim===curDim));refreshGraph();renderPanel(null);}
+function toggleExpand(id){const n=nodeById[id];if(!n)return;if(['module','file','class'].indexOf(n.type)===-1)return;if(expanded.has(id))expanded.delete(id);else expanded.add(id);rebuild();refreshGraph();renderPanel(selectedId);}
+function setDim(d){curDim=d;selectedId=null;neighSet=new Set();document.querySelectorAll('.dim-tab').forEach(t=>t.classList.toggle('active',t.dataset.dim===d));refreshGraph();renderPanel(null);const sec=document.getElementById('sec-'+d);if(sec){document.querySelectorAll('.sec').forEach(s=>s.classList.remove('highlight'));sec.classList.add('highlight');sec.scrollIntoView({behavior:'smooth',block:'start'});}}
+
+/* ============ 侧栏 ============ */
+const $c=document.getElementById('panel-content');
+const $s=document.getElementById('sel-info');
+function sevColor(s){return s==='高'?T().risk:'#eab308';}
+function nodeRow(id){const n=nodeById[id];if(!n)return'';return '<div class="row" onclick="selectNode(\''+id+'\')"><span class="n" style="background:'+nodeBaseColor(n)+'"></span>'+n.label+'<span class="arr">›</span></div>';}
+function secOpen(cls,title,dot){return '<div class="sec '+(cls||'')+'" id="sec-'+cls+'"><h2><span class="dot" style="background:'+dot+'"></span>'+title+'</h2>';}
+function pill(sev){return '<span class="pill" style="color:'+sevColor(sev)+';border-color:'+sevColor(sev)+'">'+sev+'</span>';}
+function expandBtn(id){const o=expanded.has(id);return '<button class="exp-btn" onclick="toggleExpand(\''+id+'\')">'+(o?'▾ 收起子节点':'▸ 展开子节点')+'</button>';}
+function paramsStr(p){return p.map(x=>x.n+': '+x.t).join('  ·  ');}
+function fieldsStr(f){return f.map(x=>x.n+': '+x.t).join('  ·  ');}
+
+function renderPanel(sel){
+  if(!sel){
+    $s.innerHTML='未选中节点 · 显示项目总览';
+    let h=secOpen('dep','依赖关系 / 数据流',T().call);
+    h+='<div class="card"><div class="t">模块调用方向</div><div class="kv"><span class="k">链路</span><span class="v">audio_in -> asr -> llm -> tts -> audio_out</span></div></div>';
+    h+='<div class="card"><div class="t">函数调用链</div><div class="kv"><span class="k">顺序</span><span class="v">receive_chunk -> detect -> is_utterance_end -> transcribe -> generate -> synthesize -> play</span></div></div>';
+    h+='<div class="card"><div class="t">数据流转主线</div><div class="kv"><span class="k">实体</span><span class="v">AudioChunk -> Transcript -> LLMMessage -> TTSAudio</span></div></div></div>';
+    h+='<div class="empty">提示：双击模块收起/展开文件，双击文件展开类/函数/结构体。</div>';
+    h+=secOpen('ds','核心数据结构（结构体）',T().ent);
+    structs.forEach(e=>{h+='<div class="card"><div class="t">'+e.label+' <span class="pill" style="color:'+T().ent+';border-color:'+T().ent+'">'+e.kind+'</span></div><div class="params">'+fieldsStr(e.fields)+'</div><div class="kv"><span class="k">产出</span><span class="v">'+e.producedBy.map(nodeRow).join('')+'</span></div><div class="kv"><span class="k">消费</span><span class="v">'+e.consumedBy.map(nodeRow).join('')+'</span></div><div class="kv"><span class="k">流转</span><span class="v">-> '+(e.transformsTo==='-'?'-':e.transformsTo.replace('s_',''))+'</span></div></div>';});
+    h+='</div>';
+    h+=secOpen('ctr','接口契约',T().func);
+    h+='<div class="empty">单击函数节点查看 参数/输入输出/错误码/边界。函数清单：</div>';
+    funcs.forEach(f=>h+=nodeRow(f.id));
+    h+='</div>';
+    h+=secOpen('risk','风险清单',T().risk);
+    funcs.filter(f=>f.risk).forEach(f=>{h+='<div class="card"><div class="t">'+f.label+pill(f.risk.sev)+'</div><div class="kv"><span class="k">类别</span><span class="v">'+f.risk.cat+'</span></div><div class="kv"><span class="k">坑点</span><span class="v">'+f.risk.desc+'</span></div><div class="kv"><span class="k">规避</span><span class="v">'+f.risk.avoid+'</span></div><div class="row" onclick="selectNode(\''+f.id+'\')"><span class="n" style="background:'+T().func+'"></span>跳转到函数<span class="arr">›</span></div></div>';});
+    h+='</div>';
+    $c.innerHTML=h;return;
+  }
+  const n=nodeById[sel];if(!n){renderPanel(null);return;}
+  const tn={module:'模块',file:'文件',class:'类',struct:'结构体',function:'函数'}[n.type]||n.type;
+  $s.innerHTML='已选中 <b>'+n.label+'</b> · '+(n.hasRisk?'风险':'')+tn;
+  let crumb='';
+  if(n.type==='function'){const f=fil(n.file);const c=n.cls&&cls(n.cls);crumb=(f?f.path:'')+(c?' :: '+c.label:'');}
+  else if(n.type==='class'||n.type==='struct'){const f=fil(n.file);crumb=f?f.path:'';}
+  else if(n.type==='file'){const m=mod(n.mod);crumb=m?m.label+'/':'';}
+  let crumbHtml=crumb?'<div class="crumb"><b>位置：</b>'+crumb+'</div>':'';
+
+  if(n.type==='function'){
+    const f=fn(sel);
+    let h=crumbHtml+secOpen('ctr','接口契约',T().func);
+    h+='<div class="card"><div class="t">'+f.label+'</div><div class="kv"><span class="k">用途</span><span class="v">'+f.purpose+'</span></div><div class="kv"><span class="k">返回</span><span class="v">'+f.returns+'</span></div><div class="kv"><span class="k">参数</span><span class="v"><div class="params">'+paramsStr(f.params)+'</div></span></div></div>';
+    h+='<div class="card"><div class="t">契约</div><div class="kv"><span class="k">输入</span><span class="v">'+f.contract.inputs+'</span></div><div class="kv"><span class="k">输出</span><span class="v">'+f.contract.outputs+'</span></div><div class="kv"><span class="k">错误码</span><span class="v">'+f.contract.errors+'</span></div><div class="kv"><span class="k">边界</span><span class="v">'+f.contract.boundaries+'</span></div></div></div>';
+    h+=secOpen('dep','依赖 / 数据流',T().call);
+    const callers=callEdges.filter(([,t])=>t===f.id).map(([s])=>s);const callees=callEdges.filter(([s])=>s===f.id).map(([,t])=>t);
+    h+='<div class="kv"><span class="k">调用方</span><span class="v">'+(callers.length?callers.map(nodeRow).join(''):'<span class="empty">入口</span>')+'</span></div>';
+    h+='<div class="kv"><span class="k">被调用</span><span class="v">'+(callees.length?callees.map(nodeRow).join(''):'<span class="empty">出口</span>')+'</span></div></div>';
+    h+=secOpen('ds','数据结构（参数/返回）',T().ent);
+    const prod=structs.filter(e=>e.producedBy.includes(f.id));const cons=structs.filter(e=>e.consumedBy.includes(f.id));
+    h+='<div class="kv"><span class="k">产出</span><span class="v">'+(prod.length?prod.map(e=>nodeRow(e.id)).join(''):'-')+'</span></div>';
+    h+='<div class="kv"><span class="k">消费</span><span class="v">'+(cons.length?cons.map(e=>nodeRow(e.id)).join(''):'-')+'</span></div></div>';
+    h+=secOpen('risk','风险',T().risk);
+    if(f.risk)h+='<div class="card"><div class="t">'+f.label+pill(f.risk.sev)+'</div><div class="kv"><span class="k">坑点</span><span class="v">'+f.risk.desc+'</span></div><div class="kv"><span class="k">规避</span><span class="v">'+f.risk.avoid+'</span></div></div>';else h+='<div class="empty">该函数暂无已知风险。</div>';
+    h+='</div>';$c.innerHTML=h;
+  }else if(n.type==='struct'){
+    const e=st(sel);
+    let h=crumbHtml+secOpen('ds','结构体 / 数据类',T().ent);
+    h+='<div class="card"><div class="t">'+e.label+' <span class="pill" style="color:'+T().ent+';border-color:'+T().ent+'">'+e.kind+'</span></div><div class="params">'+fieldsStr(e.fields)+'</div><div class="kv"><span class="k">流转</span><span class="v">-> '+(e.transformsTo==='-'?'-':e.transformsTo.replace('s_',''))+'</span></div></div></div>';
+    h+=secOpen('dep','生产 / 消费',T().call);
+    h+='<div class="kv"><span class="k">产出方</span><span class="v">'+e.producedBy.map(nodeRow).join('')+'</span></div>';
+    h+='<div class="kv"><span class="k">消费方</span><span class="v">'+e.consumedBy.map(nodeRow).join('')+'</span></div></div>';
+    h+=secOpen('ctr','相关函数契约',T().func);[...e.producedBy,...e.consumedBy].forEach(id=>h+=nodeRow(id));h+='</div>';
+    $c.innerHTML=h;
+  }else if(n.type==='file'){
+    const f=fil(sel);const m=mod(f.mod);const fns=funcs.filter(x=>x.file===f.id);const clsL=classes.filter(x=>x.file===f.id);const sts=structs.filter(x=>x.file===f.id);
+    let h=crumbHtml+secOpen('dep','文件概览',T().file);
+    h+='<div class="card"><div class="t">'+f.label+'</div><div class="kv"><span class="k">路径</span><span class="v">'+f.path+'</span></div><div class="kv"><span class="k">模块</span><span class="v">'+(m?m.label:'')+'</span></div><div class="kv"><span class="k">成员</span><span class="v">类 '+clsL.length+' · 函数 '+fns.length+' · 结构体 '+sts.length+'</span></div></div>'+expandBtn(f.id)+'</div>';
+    h+=secOpen('ctr','成员',T().func);clsL.forEach(c=>h+=nodeRow(c.id));fns.forEach(x=>h+=nodeRow(x.id));sts.forEach(x=>h+=nodeRow(x.id));h+='</div>';$c.innerHTML=h;
+  }else if(n.type==='class'){
+    const c=cls(sel);const f=fil(c.file);const methods=funcs.filter(x=>x.cls===c.id);
+    let h=crumbHtml+secOpen('dep','类概览',T().cls);
+    h+='<div class="card"><div class="t">'+c.label+'</div><div class="kv"><span class="k">文件</span><span class="v">'+(f?f.path:'')+'</span></div><div class="kv"><span class="k">方法</span><span class="v">'+methods.length+' 个</span></div></div>'+expandBtn(c.id)+'</div>';
+    h+=secOpen('ctr','方法',T().func);methods.forEach(x=>h+=nodeRow(x.id));h+='</div>';$c.innerHTML=h;
+  }else if(n.type==='module'){
+    const m=mod(sel);const mfs=files.filter(x=>x.mod===m.id);const mfn=funcs.filter(x=>fil(x.file)&&fil(x.file).mod===m.id);const risks=mfn.filter(x=>x.risk);
+    let h=secOpen('dep','模块概览',T().mod);
+    h+='<div class="card"><div class="t">'+m.label+'</div><div class="kv"><span class="k">职责</span><span class="v">'+m.summary+'</span></div><div class="kv"><span class="k">文件</span><span class="v">'+mfs.length+' 个 · 函数 '+mfn.length+' 个</span></div></div>'+expandBtn(m.id)+'</div>';
+    h+=secOpen('ctr','文件清单',T().file);mfs.forEach(x=>h+=nodeRow(x.id));h+='</div>';
+    h+=secOpen('risk','模块风险',T().risk);if(risks.length)risks.forEach(x=>h+='<div class="card"><div class="t">'+x.label+pill(x.risk.sev)+'</div><div class="kv"><span class="k">规避</span><span class="v">'+x.risk.avoid+'</span></div></div>');else h+='<div class="empty">该模块暂无已知风险。</div>';h+='</div>';$c.innerHTML=h;
+  }
+}
+
+/* ============ 搜索 ============ */
+const $si=document.getElementById('search-input');const $sr=document.getElementById('search-results');let searchTimer=null;
+function doSearch(q){
+  q=q.trim().toLowerCase();if(!q){$sr.style.display='none';return;}
+  const res=[];
+  funcs.forEach(f=>{const hay=[f.label,f.purpose,f.returns,f.contract.inputs,f.contract.outputs,f.contract.errors,f.contract.boundaries,f.params.map(p=>p.n+':'+p.t).join(' '),f.risk&&f.risk.cat,f.risk&&f.risk.desc,f.risk&&f.risk.avoid].filter(Boolean).join(' ').toLowerCase();if(hay.includes(q))res.push({tag:f.risk?'风险函数':'函数',color:f.risk?T().risk:T().func,id:f.id,label:f.label,sub:'('+f.params.map(p=>p.n).join(',')+') -> '+f.returns});});
+  structs.forEach(e=>{const hay=[e.label,e.kind,e.fields.map(x=>x.n+':'+x.t).join(' '),e.transformsTo,e.producedBy.join(' '),e.consumedBy.join(' ')].join(' ').toLowerCase();if(hay.includes(q))res.push({tag:'结构体',color:T().ent,id:e.id,label:e.label,sub:e.fields.map(x=>x.n+':'+x.t).join(', ')});});
+  classes.forEach(c=>{if((c.label+' class').toLowerCase().includes(q))res.push({tag:'类',color:T().cls,id:c.id,label:c.label,sub:'class'});});
+  files.forEach(f=>{if((f.label+' '+f.path).toLowerCase().includes(q))res.push({tag:'文件',color:T().file,id:f.id,label:f.label,sub:f.path});});
+  modules.forEach(m=>{if((m.label+' '+m.summary).toLowerCase().includes(q))res.push({tag:'模块',color:T().mod,id:m.id,label:m.label,sub:m.summary});});
+  if(!res.length)$sr.innerHTML='<div class="sr-empty">无匹配结果</div>';else $sr.innerHTML=res.map(r=>'<div class="sr-item" onclick="selectNode(\''+r.id+'\')"><span class="sr-tag" style="background:'+r.color+'">'+r.tag+'</span><span class="sr-label">'+r.label+'</span><span class="sr-sub">'+r.sub+'</span></div>').join('');
+  $sr.style.display='block';
+}
+function closeSearch(){$sr.style.display='none';}
+$si.addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>doSearch($si.value),180);});
+$si.addEventListener('focus',()=>{if($si.value)doSearch($si.value);});
+document.addEventListener('click',e=>{if(!e.target.closest('.search'))closeSearch();});
+
+/* ============ 主题 / 面板开关 ============ */
+function applyTheme(){document.documentElement.setAttribute('data-theme',theme);document.getElementById('theme-toggle').textContent=theme==='dark'?'🌙 暗色':'☀️ 亮色';syncLegendVars();refreshGraph();renderPanel(selectedId);}
+document.getElementById('theme-toggle').addEventListener('click',()=>{theme=theme==='dark'?'light':'dark';applyTheme();});
+document.getElementById('panel-toggle').addEventListener('click',()=>document.getElementById('panel').classList.toggle('collapsed'));
+document.querySelectorAll('.dim-tab').forEach(t=>t.addEventListener('click',()=>setDim(t.dataset.dim)));
+
+/* ============ 状态 / 加载 ============ */
+function setStatus(msg,isErr){const box=document.getElementById('status');document.getElementById('status-text').innerHTML=msg;box.style.display='flex';box.querySelector('.spin').style.display=isErr?'none':'block';}
+const CDN={
+  // three.js 全局构建（UMD，设 window.THREE，供手写 canvas 纹理标签精灵使用）
+  // r160 是仍提供 build/three.min.js(UMD)的最新版；3d-force-graph 内部打包 r183，
+  // 标签精灵用全局 three 渲染到 3d-force-graph 场景（Sprite/SpriteMaterial/CanvasTexture API 跨版本稳定）
+  three:['lib/three.min.js','https://registry.npmmirror.com/three/0.160.0/files/build/three.min.js','https://unpkg.com/three@0.160.0/build/three.min.js','https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js'],
+  fg:['lib/3d-force-graph.min.js','https://registry.npmmirror.com/3d-force-graph/latest/files/dist/3d-force-graph.min.js','https://cdn.npmmirror.com/npm/3d-force-graph/dist/3d-force-graph.min.js','https://cdn.jsdelivr.net/npm/3d-force-graph/dist/3d-force-graph.min.js','https://unpkg.com/3d-force-graph/dist/3d-force-graph.min.js']
+};
+function loadScript(urls,i,done){if(i>=urls.length){done(false);return;}const s=document.createElement('script');s.src=urls[i];s.onload=()=>done(true);s.onerror=()=>loadScript(urls,i+1,done);document.head.appendChild(s);}
+function bootLoader(){
+  setStatus('加载 three.js (1/2)…');
+  loadScript(CDN.three,0,ok=>{if(!ok){setStatus('three.js 加载失败：所有 CDN 均不可达。<br>请检查网络后刷新。',true);return;}
+    setStatus('加载 3D 引擎 (2/2)…');
+    loadScript(CDN.fg,0,ok2=>{if(!ok2){setStatus('3D 引擎加载失败：所有 CDN 均不可达。<br>请检查网络后刷新。',true);return;}
+      setStatus('渲染中…');try{initGraph();}catch(e){setStatus('渲染出错：'+e.message+'<br>请把浏览器控制台(F12)的错误发我。',true);console.error(e);}
+    });
+  });
+}
+
+/* ============ 启动 ============ */
+syncLegendVars();renderPanel(null);
+// 等待 ESM 模块就绪（成功则单实例直接渲染；失败则回退本地 UMD bootLoader）
+window.addEventListener('engines-ready',()=>{
+  if(window.__esmOK){
+    document.getElementById('status-text').textContent='渲染中…';
+    try{initGraph();}catch(e){setStatus('渲染出错：'+e.message+'<br>请把F12错误发我。',true);console.error(e);}
+  }else{
+    bootLoader();
+  }
+});
+</script>
+</body>
+</html>
