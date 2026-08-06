@@ -24,8 +24,10 @@ export const EDGES = {
   PRODUCES: "produces", CONSUMES: "consumes", TRANSFORMS: "transforms", DATA_FLOW: "data_flow",
 };
 
-// data-flow (advisory+runtime) edges animate; structural edges do not
-const FLOW_EDGES = new Set([EDGES.PRODUCES, EDGES.CONSUMES, EDGES.TRANSFORMS, EDGES.DATA_FLOW]);
+// domain-model (advisory) edges only; data_flow is runtime (ticket 05)
+const DOMAIN_EDGES = new Set([EDGES.PRODUCES, EDGES.CONSUMES, EDGES.TRANSFORMS]);
+// structural (parser) edges shown in the dependency view
+const STRUCT_EDGES = new Set([EDGES.CALLS, EDGES.IMPORTS, EDGES.CONTAINS, EDGES.REFERENCES, EDGES.DATA_FLOW]);
 
 // ---- themes (carried from the verified prototype) ----
 export const THEMES = {
@@ -35,6 +37,8 @@ export const THEMES = {
     domain_entity: "#f0a03b", function: "#5b8def", external: "#6b7480", risk: "#ef4444",
     contains: "#23282f", calls: "#4a5260", imports: "#3a5a8a", references: "#5a4a6a",
     flow: "#ffc107", dim: "#1e232b", dimLink: "#15191f",
+    // ticket 05 runtime overlay: observed-but-unexpected (divergence) + could-fire-but-didn't
+    unexpected: "#f43f5e", notFired: "#394150",
   },
   light: {
     graphBg: "#eef1f5", label: "#2a3140",
@@ -42,6 +46,7 @@ export const THEMES = {
     domain_entity: "#d97706", function: "#2563eb", external: "#94a3b8", risk: "#dc2626",
     contains: "#cbd5e1", calls: "#94a3b8", imports: "#3b6ea5", references: "#8b7aa3",
     flow: "#c2410c", dim: "#dde2ea", dimLink: "#e6eaf0",
+    unexpected: "#e11d48", notFired: "#b6bfcc",
   },
 };
 
@@ -91,21 +96,39 @@ export function neighbors(graph, nodeId) {
 }
 
 // ---- the four views = data subsets over one schema (decision 05) ----
-// dep: everything (calls+imports+contains+references + runtime overlay later)
+// dep: structural skeleton (calls/imports/contains/references + runtime data_flow overlay);
+//      domain_entity nodes are advisory and belong to the ds view, so dim them here.
 // ctr: functions/files/classes + calls/contains (parser contracts surface)
-// ds:  domain_entity + produces/consumes/transforms (LLM, ticket 04)
-// risk: nodes with risk (LLM, ticket 03)
+// ds:  domain_entity + the functions that produce/consume them + produces/consumes/transforms
+// risk: nodes with risk (LLM, ticket 03/04), ranked in the panel
 export const DIM = {
-  dep:  { nodeOk: () => true,                       linkOk: () => true },
+  dep:  { nodeOk: (n) => n.type !== TYPES.DOMAIN_ENTITY,
+          linkOk: (l) => STRUCT_EDGES.has(l.type) },
   ctr:  { nodeOk: (n) => [TYPES.FUNCTION, TYPES.FILE, TYPES.CLASS].includes(n.type),
           linkOk: (l) => [EDGES.CALLS, EDGES.CONTAINS].includes(l.type) },
   ds:   { nodeOk: (n) => n.type === TYPES.DOMAIN_ENTITY || n.type === TYPES.FUNCTION,
-          linkOk: (l) => FLOW_EDGES.has(l.type) },
+          linkOk: (l) => DOMAIN_EDGES.has(l.type) },
   risk: { nodeOk: (n) => hasRisk(n),                 linkOk: () => false },
 };
 
 export function hasRisk(n) {
   return !!(n.risk && n.risk.description);
+}
+
+// ---- runtime overlay (ticket 05) ----
+// A node "has runtime" if a trace observed it running; a calls/references edge
+// carries attrs.runtime = {fired, call_count} once a trace is overlaid. A data_flow
+// edge carries attrs.expected (false = observed call with no static counterpart).
+export function hasRuntime(n) {
+  return !!(n.runtime && n.runtime.call_count > 0);
+}
+export function linkRuntime(link) {
+  const rt = link.raw && link.raw.attrs && link.raw.attrs.runtime;
+  return rt || null;
+}
+export function isUnexpectedFlow(link) {
+  return link.type === EDGES.DATA_FLOW && link.raw && link.raw.attrs
+    && link.raw.attrs.expected === false;
 }
 
 // ---- lighting (selection + view filtering) ----
@@ -141,17 +164,23 @@ export function nodeColor(node, theme, state) {
 export function linkColor(link, theme, state) {
   const t = THEMES[theme];
   if (!linkLit(link, state)) return t.dimLink;
+  if (isUnexpectedFlow(link)) return t.unexpected;   // observed call with no static counterpart
+  if (link.type === EDGES.DATA_FLOW) return t.flow;  // observed flow that matched the expected graph
+  const rt = linkRuntime(link);
+  if (rt && rt.fired === false) return t.notFired;   // could-fire-but-didn't (trace loaded)
   switch (link.type) {
     case EDGES.CONTAINS: return t.contains;
     case EDGES.CALLS: return t.calls;
     case EDGES.IMPORTS: return t.imports;
     case EDGES.REFERENCES: return t.references;
-    default: return t.flow; // produces/consumes/transforms/data_flow
+    default: return t.flow; // produces/consumes/transforms
   }
 }
 
 export function linkWidth(link, state) {
   if (!linkLit(link, state)) return 0.4;
+  const rt = linkRuntime(link);
+  if (rt && rt.fired === false) return 0.5;  // could-fire-but-didn't: thin
   switch (link.type) {
     case EDGES.CONTAINS: return 0.7;
     case EDGES.CALLS: return 1.2;
@@ -200,8 +229,38 @@ export function particles(link) {
   }
 }
 
+// ---- the four views as graph subsets ----
+// ds and risk are *strict* subsets (hide everything else); dep and ctr use the
+// expand/collapse visibility above and dim the rest via lighting. Domain entities
+// and risks sit outside the `contains` tree, so the strict views ignore expand state.
+export function dsSubgraph(graph) {
+  const { nodesById } = buildIndexes(graph);
+  const ids = new Set();
+  const links = [];
+  for (const e of graph.edges) {
+    if (!DOMAIN_EDGES.has(e.type)) continue;
+    links.push({ source: e.source, target: e.target, type: e.type, origin: e.origin, raw: e });
+    ids.add(e.source); ids.add(e.target);
+  }
+  const nodes = [...ids].map((id) => {
+    const n = nodesById.get(id) || { id, label: id, type: TYPES.DOMAIN_ENTITY, origin: "llm" };
+    return { id, label: n.label, type: n.type, origin: n.origin, hasRisk: hasRisk(n), parent: null, raw: n };
+  });
+  return { nodes, links };
+}
+
+export function riskSubgraph(graph) {
+  const nodes = graph.nodes
+    .filter((n) => hasRisk(n))
+    .map((n) => ({ id: n.id, label: n.label, type: n.type, origin: n.origin, hasRisk: true, parent: null, raw: n }));
+  return { nodes, links: [] };
+}
+
 // ---- the transform: graph JSON -> render model ----
 export function buildRenderModel(graph, { expanded, state }) {
+  const dim = (state && state.dim) || "dep";
+  if (dim === "ds") return dsSubgraph(graph);
+  if (dim === "risk") return riskSubgraph(graph);
   const { parentOf } = buildIndexes(graph);
   const chainVisible = new Set(
     graph.nodes.filter((n) => n.type !== TYPES.EXTERNAL && isVisible(n.id, parentOf, expanded)).map((n) => n.id)
@@ -234,7 +293,51 @@ export function buildRenderModel(graph, { expanded, state }) {
   return { nodes, links };
 }
 
-// ---- search (covers functions/classes/files/modules/external; risks+structs in 03/04) ----
+// ---- ranking / ordering (pure, for the panel) ----
+const SEV_RANK = { high: 0, medium: 1, low: 2 };
+
+export function riskRank(graph) {
+  return graph.nodes
+    .filter((n) => hasRisk(n))
+    .sort((a, b) => {
+      const ra = SEV_RANK[(a.risk && a.risk.severity) || ""] ?? 3;
+      const rb = SEV_RANK[(b.risk && b.risk.severity) || ""] ?? 3;
+      if (ra !== rb) return ra - rb;
+      return (a.label || "").localeCompare(b.label || "");
+    });
+}
+
+export function domainPipeline(graph) {
+  // Topological order of DomainEntity nodes along `transforms` edges (sources first).
+  // Ties and cycles fall back to first-seen order so the pipeline is always total.
+  const ents = graph.nodes.filter((n) => n.type === TYPES.DOMAIN_ENTITY);
+  const entIds = new Set(ents.map((n) => n.id));
+  const succ = new Map();
+  const indeg = new Map();
+  for (const id of entIds) { succ.set(id, []); indeg.set(id, 0); }
+  for (const e of graph.edges) {
+    if (e.type !== EDGES.TRANSFORMS || !entIds.has(e.source) || !entIds.has(e.target)) continue;
+    succ.get(e.source).push(e.target);
+    indeg.set(e.target, (indeg.get(e.target) || 0) + 1);
+  }
+  const queue = ents.filter((n) => indeg.get(n.id) === 0).map((n) => n.id);
+  const order = [];
+  const seen = new Set();
+  while (queue.length) {
+    const id = queue.shift();
+    if (seen.has(id)) continue;
+    seen.add(id); order.push(id);
+    for (const s of succ.get(id) || []) {
+      indeg.set(s, indeg.get(s) - 1);
+      if (indeg.get(s) === 0) queue.push(s);
+    }
+  }
+  for (const n of ents) if (!seen.has(n.id)) order.push(n.id);
+  const byId = new Map(ents.map((n) => [n.id, n]));
+  return order.map((id) => byId.get(id));
+}
+
+// ---- search (covers functions/structs/risks and jumps to the node) ----
 export function search(graph, query) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
@@ -244,6 +347,9 @@ export function search(graph, query) {
       n.purpose, n.data_flow_role,
       n.signature && n.signature.returns,
       n.signature && (n.signature.params || []).map((p) => p.name + ":" + p.type).join(" "),
+      n.risk && n.risk.description, n.risk && n.risk.category, n.risk && n.risk.severity,
+      n.fields && n.fields.map((f) => f.name + ":" + f.type).join(" "),
+      n.contract && [n.contract.inputs, n.contract.outputs, n.contract.errors].join(" "),
     ].filter(Boolean).join(" ").toLowerCase();
     if (!hay.includes(q)) continue;
     let tag = n.type;

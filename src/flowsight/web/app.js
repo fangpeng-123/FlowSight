@@ -9,7 +9,7 @@
 import {
   buildIndexes, buildRenderModel, neighbors, nodeColor, linkColor, linkWidth,
   nodeVal, arrowLen, particles, nodeBaseColor, hasRisk, THEMES, TYPES, EDGES,
-  search, topLevelModules,
+  search, topLevelModules, riskRank, domainPipeline,
 } from "./adapter.js";
 
 let graph = null;
@@ -36,6 +36,30 @@ async function load() {
     `${graph.project.python || ""} · ${graph.nodes.length} 节点 · ${graph.edges.length} 边`;
   syncLegendVars();
   renderPanel(null);
+  loadTraceBadge();
+}
+
+// ticket 05: surface the runtime overlay. If a trace is active, /api/divergence
+// returns its trace_id + an actual-on-expected divergence summary; show a badge
+// in the panel head so the overlay is discoverable. Silent no-op without a trace.
+async function loadTraceBadge() {
+  const $b = document.getElementById("trace-badge");
+  if (!$b) return;
+  try {
+    const r = await fetch("/api/divergence");
+    const j = await r.json();
+    if (!j.ok || !j.trace_id) { $b.style.display = "none"; return; }
+    const d = j.divergence || {};
+    const nf = (d.not_fired || []).length, un = (d.unexpected || []).length, rl = (d.role || []).length;
+    const bits = [`<span class="tdot"></span>运行时追踪已叠加`];
+    const sub = [];
+    if (nf) sub.push(`${nf} 未触发`);
+    if (un) sub.push(`${un} 异常`);
+    if (rl) sub.push(`${rl} 角色偏离`);
+    if (sub.length) bits.push(sub.join(" · "));
+    $b.innerHTML = bits.join(" · ");
+    $b.style.display = "inline-flex";
+  } catch (e) { $b.style.display = "none"; }
 }
 
 window.addEventListener("engines-ready", async () => {
@@ -162,14 +186,17 @@ function flyTo(id) {
 // ---------- selection / expand / dim ----------
 function selectNode(id) {
   closeSearch();
-  document.querySelectorAll(".dim-tab").forEach((t) => t.classList.remove("active"));
-  state.dim = "dep"; state.selectedId = id; state.neigh = neighbors(graph, id);
+  // keep the current view (ticket 04): selecting a domain entity in the ds view or
+  // a risk in the risk view stays in that view rather than yanking back to dep.
+  state.selectedId = id; state.neigh = neighbors(graph, id);
+  document.querySelectorAll(".dim-tab").forEach((t) => t.classList.toggle("active", t.dataset.dim === state.dim));
   refreshGraph(); flyTo(id); renderPanel(id);
   maybeEnrich(id);
 }
 
-// Lazy per-function LLM enrichment (ticket 03). Advisory: a fetch failure or an
-// unconfigured LLM never blocks viewing the trusted parser structure.
+// Lazy per-function LLM enrichment (ticket 03 + 04). Advisory: a fetch failure or
+// an unconfigured LLM never blocks viewing the trusted parser structure. Ticket 04
+// also merges the inferred DomainEntity nodes + flow edges into the client graph.
 async function maybeEnrich(id) {
   const n = nodeById(id);
   if (!n || n.type !== TYPES.FUNCTION) return;
@@ -185,6 +212,7 @@ async function maybeEnrich(id) {
       n.data_flow_role = j.node.data_flow_role || "";
       n.risk = j.node.risk || null;
       n.attrs = { ...(n.attrs || {}), enriched: true, enriching: false };
+      mergeEntities(j.entities);          // ticket 04: inferred domain entities
     } else {
       n.attrs = { ...(n.attrs || {}), enriching: false, enrichError: (j && j.error) || "富化不可用" };
     }
@@ -193,6 +221,47 @@ async function maybeEnrich(id) {
   }
   if (state.selectedId === id) renderPanel(id);
 }
+
+// Merge a delta of entity nodes/edges (from /api/enrich) into the client graph,
+// deduping by id / (source,target,type,via). Rebuilds the graph if anything was added.
+function mergeEntities(entities) {
+  if (!graph || !entities) return;
+  let added = false;
+  const haveNode = new Set(graph.nodes.map((n) => n.id));
+  for (const n of (entities.nodes || [])) {
+    if (!haveNode.has(n.id)) { graph.nodes.push(n); haveNode.add(n.id); added = true; }
+  }
+  const ekey = (e) => `${e.source}|${e.target}|${e.type}|${(e.attrs && e.attrs.via) || ""}`;
+  const haveEdge = new Set(graph.edges.map(ekey));
+  for (const e of (entities.edges || [])) {
+    const k = ekey(e);
+    if (!haveEdge.has(k)) { graph.edges.push(e); haveEdge.add(k); added = true; }
+  }
+  if (added) {
+    window.__parentOf = buildIndexes(graph).parentOf;
+    rebuild();
+  }
+}
+
+// "Progressive" affordance (ticket 04): enrich every function at once so the
+// data-structures / risk views fill in. Cache-aware server-side; re-fetches the
+// graph afterward. Preserves expand state.
+async function enrichAll() {
+  setStatus("正在富化全部函数…");
+  try {
+    const r = await fetch("/api/enrich-all");
+    const j = await r.json();
+    if (!j.ok) { setStatus(j.error || "富化失败", true); return; }
+    graph = await (await fetch("/api/graph")).json();
+    window.__parentOf = buildIndexes(graph).parentOf;
+    rebuild(); refreshGraph();
+    renderPanel(state.selectedId);
+    document.getElementById("status").style.display = "none";
+  } catch (e) {
+    setStatus("富化失败：" + e.message, true);
+  }
+}
+window.enrichAll = enrichAll;
 function clearSelection() {
   state.selectedId = null; state.neigh = new Set();
   document.querySelectorAll(".dim-tab").forEach((t) => t.classList.toggle("active", t.dataset.dim === state.dim));
@@ -241,22 +310,115 @@ function secOpen(cls, title, dot) { return `<div class="sec ${cls || ""}" id="se
 function expandBtn(id) { const o = expanded.has(id); return `<button class="exp-btn" onclick="toggleExpand('${id}')">${o ? "▾ 收起子节点" : "▸ 展开子节点"}</button>`; }
 function paramsStr(p) { return (p || []).map((x) => x.name + (x.type ? ": " + x.type : "")).join("  ·  "); }
 function fieldsStr(f) { return (f || []).map((x) => x.name + (x.type ? ": " + x.type : "")).join("  ·  "); }
+const labelOf = (id) => { const n = nodeById(id); return n ? n.label : id; };
+function enrichAllBtn() {
+  return `<button class="exp-btn" onclick="enrichAll()">✦ 富化全部函数（推断领域实体与风险）</button>`;
+}
+
+// ---- runtime overlay card (ticket 05) ----
+// Per-function runtime stats captured by a viztracer trace: call_count, timings,
+// and sampled arg/return value reprs. Shown only when a trace observed the
+// function running. origin=runtime (actual, observed).
+function fmtUs(us) {
+  if (us == null) return "-";
+  if (us >= 1000) return (us / 1000).toFixed(2) + " ms";
+  return us.toFixed(1) + " µs";
+}
+function valList(label, vals) {
+  if (!vals || !vals.length) return "";
+  return `<div class="kv"><span class="k">${label}</span><span class="v"><div class="params">${vals.map((v) => `<div>${v}</div>`).join("")}</div></span></div>`;
+}
+function runtimeCard(n) {
+  const rt = n.runtime;
+  if (!rt || !rt.call_count) return "";
+  let h = secOpen("rt", "运行时追踪", T().flow);
+  h += `<div class="card"><div class="t">${n.label} ${trustPill("runtime")}</div>`;
+  h += `<div class="kv"><span class="k">调用次数</span><span class="v">${rt.call_count}</span></div>`;
+  h += `<div class="kv"><span class="k">耗时</span><span class="v">均值 ${fmtUs(rt.avg_dur_us)} · 区间 ${fmtUs(rt.min_dur_us)}–${fmtUs(rt.max_dur_us)} · 累计 ${fmtUs(rt.total_dur_us)}</span></div>`;
+  h += valList("参数采样", rt.arg_values);
+  h += valList("返回采样", rt.return_values);
+  h += `</div></div>`;
+  return h;
+}
+
+// ---- dim-aware project overview (no node selected) ----
+function overviewPanel() {
+  if (state.dim === "risk") return riskOverview();
+  if (state.dim === "ds") return dsOverview();
+  return defaultOverview();
+}
+
+function defaultOverview() {
+  let h = secOpen("dep", "依赖关系 / 数据流", T().call);
+  const mods = graph.nodes.filter((n) => n.type === TYPES.MODULE);
+  h += `<div class="card"><div class="t">模块（${mods.length}）</div>${mods.map(nodeRow).join("")}</div>`;
+  h += `<div class="empty">提示：双击模块/文件展开子节点，单击节点查看详情。切换上方标签可查看 契约 / 数据结构 / 风险。</div></div>`;
+  h += secOpen("ctr", "接口契约", T().function);
+  h += `<div class="empty">单击函数节点查看 参数 / 返回 / 调用方 / 被调用。${trustPill("parser")} 为解析器可信结构。</div></div>`;
+  h += secOpen("ds", `数据结构（${graph.nodes.filter((n) => n.type === TYPES.DOMAIN_ENTITY).length}）`, T().domain_entity);
+  h += `<div class="empty">领域实体（LLM 推断）在富化后出现；切换到「数据结构」标签查看管线。</div></div>`;
+  h += secOpen("risk", `风险清单（${riskRank(graph).length}）`, T().risk);
+  h += `<div class="empty">风险（LLM 推断）在富化后出现；切换到「风险」标签按严重度排列。</div></div>`;
+  return h;
+}
+
+function riskOverview() {
+  const risks = riskRank(graph);
+  let h = secOpen("risk", `风险清单（${risks.length}） ${trustPill("llm")}`, T().risk);
+  if (!risks.length) {
+    h += `<div class="empty">尚无风险--函数经 LLM 富化后，风险会按严重度（high > medium > low）排列在此。</div>`;
+    h += enrichAllBtn();
+  } else {
+    risks.forEach((n) => {
+      const r = n.risk || {};
+      const sc = sevColor(r.severity);
+      h += `<div class="card"><div class="t" onclick="selectNode('${n.id}')" style="cursor:pointer"><span class="n" style="background:${sc}"></span>${n.label} <span class="pill" style="color:${sc};border-color:${sc}">${r.severity || "?"}</span></div>`;
+      h += `<div class="kv"><span class="k">类别</span><span class="v">${r.category || "-"}</span></div>`;
+      h += `<div class="kv"><span class="k">坑点</span><span class="v">${r.description || "-"}</span></div>`;
+      h += `<div class="kv"><span class="k">规避</span><span class="v">${r.avoidance || "-"}</span></div></div>`;
+    });
+  }
+  h += `</div>`;
+  return h;
+}
+
+function entityCard(n) {
+  const producers = edgesOf(n.id, "in", EDGES.PRODUCES).map(nodeRow).join("") || '<span class="empty">-</span>';
+  const consumers = edgesOf(n.id, "in", EDGES.CONSUMES).map(nodeRow).join("") || '<span class="empty">-</span>';
+  return `<div class="card"><div class="t" onclick="selectNode('${n.id}')" style="cursor:pointer"><span class="n" style="background:${T().domain_entity}"></span>${n.label} ${trustPill("llm")}</div>`
+    + `<div class="kv"><span class="k">生产者</span><span class="v">${producers}</span></div>`
+    + `<div class="kv"><span class="k">消费者</span><span class="v">${consumers}</span></div></div>`;
+}
+
+function dsOverview() {
+  const ents = domainPipeline(graph);
+  const tfs = graph.edges.filter((e) => e.type === EDGES.TRANSFORMS);
+  let h = secOpen("ds", `数据结构 / 领域管线（${ents.length} 实体） ${trustPill("llm")}`, T().domain_entity);
+  if (!ents.length) {
+    h += `<div class="empty">尚无领域实体--函数经 LLM 富化后，会推断出领域数据管线（如 AudioChunk -> Transcript -> LLMMessage -> TTSAudio）。</div>`;
+    h += enrichAllBtn();
+  } else {
+    ents.forEach((n) => { h += entityCard(n); });
+    if (tfs.length) {
+      h += `<div class="kv" style="margin-top:6px"><span class="k">转换</span><span class="v">`;
+      tfs.forEach((e) => {
+        const via = (e.attrs && e.attrs.via_label) || "";
+        h += `<div class="row" onclick="selectNode('${(e.attrs && e.attrs.via) || ""}')"><span class="n" style="background:${T().flow}"></span>${labelOf(e.source)} → ${labelOf(e.target)}${via ? ` <span class="empty">经 ${via}</span>` : ""}<span class="arr">›</span></div>`;
+      });
+      h += `</span></div>`;
+    }
+  }
+  h += `</div>`;
+  return h;
+}
 
 function renderPanel(sel) {
   if (!graph) return;
   if (!sel) {
-    $s.innerHTML = "未选中节点 · 显示项目总览";
-    let h = secOpen("dep", "依赖关系 / 数据流", T().call);
-    const mods = graph.nodes.filter((n) => n.type === TYPES.MODULE);
-    h += `<div class="card"><div class="t">模块（${mods.length}）</div>${mods.map(nodeRow).join("")}</div>`;
-    h += `<div class="empty">提示：双击模块/文件展开子节点，单击节点查看详情。</div></div>`;
-    h += secOpen("ctr", "接口契约", T().function);
-    h += `<div class="empty">单击函数节点查看 参数 / 返回 / 调用方 / 被调用。${trustPill("parser")} 为解析器可信结构。</div></div>`;
-    h += secOpen("ds", "数据结构", T().domain_entity);
-    h += `<div class="empty">领域实体（LLM 推断）将在富化后出现。</div></div>`;
-    h += secOpen("risk", "风险清单", T().risk);
-    h += `<div class="empty">风险（LLM 推断）将在富化后出现。</div></div>`;
-    $c.innerHTML = h;
+    $s.innerHTML = state.dim === "risk" ? "风险清单 · 按严重度排列"
+      : state.dim === "ds" ? "数据结构 · 领域数据管线"
+      : "未选中节点 · 显示项目总览";
+    $c.innerHTML = overviewPanel();
     return;
   }
   const n = nodeById(sel);
@@ -301,6 +463,7 @@ function renderPanel(sel) {
       h += `<div class="empty">单击节点可触发 LLM 富化（用途 / 契约 / 风险）。${trustPill("parser")} 结构为解析器可信。</div>`;
     }
     h += `</div>`;
+    h += runtimeCard(n);
     h += secOpen("dep", "依赖 / 数据流", T().call);
     const callers = callersOf(sel), callees = calleesOf(sel);
     h += `<div class="kv"><span class="k">调用方</span><span class="v">${callers.length ? callers.map(nodeRow).join("") : '<span class="empty">入口</span>'}</span></div>`;
@@ -358,6 +521,23 @@ function renderPanel(sel) {
     const importers = edgesOf(sel, "in", EDGES.IMPORTS);
     h += `<div class="kv"><span class="k">被导入</span><span class="v">${importers.length ? importers.map(nodeRow).join("") : '<span class="empty">—</span>'}</span></div></div>`;
     $c.innerHTML = h;
+  } else if (n.type === TYPES.DOMAIN_ENTITY) {
+    const producers = edgesOf(sel, "in", EDGES.PRODUCES);
+    const consumers = edgesOf(sel, "in", EDGES.CONSUMES);
+    const tIn = graph.edges.filter((e) => e.type === EDGES.TRANSFORMS && e.target === sel);
+    const tOut = graph.edges.filter((e) => e.type === EDGES.TRANSFORMS && e.source === sel);
+    let h = secOpen("ds", "领域实体", T().domain_entity);
+    h += `<div class="card"><div class="t">${n.label} ${trustPill("llm")}</div><div class="kv"><span class="k">来源</span><span class="v">LLM 推断（advisory）</span></div></div>`;
+    h += `<div class="kv"><span class="k">生产者</span><span class="v">${producers.length ? producers.map(nodeRow).join("") : '<span class="empty">-</span>'}</span></div>`;
+    h += `<div class="kv"><span class="k">消费者</span><span class="v">${consumers.length ? consumers.map(nodeRow).join("") : '<span class="empty">-</span>'}</span></div>`;
+    if (tIn.length || tOut.length) {
+      h += `<div class="kv"><span class="k">转换</span><span class="v">`;
+      tIn.forEach((e) => { h += `<div class="row" onclick="selectNode('${e.source}')"><span class="n" style="background:${T().flow}"></span>${labelOf(e.source)} -> ${n.label}<span class="arr">›</span></div>`; });
+      tOut.forEach((e) => { h += `<div class="row" onclick="selectNode('${e.target}')"><span class="n" style="background:${T().flow}"></span>${n.label} -> ${labelOf(e.target)}<span class="arr">›</span></div>`; });
+      h += `</span></div>`;
+    }
+    h += `</div>`;
+    $c.innerHTML = h;
   } else {
     $c.innerHTML = crumbHtml + `<div class="empty">暂无详细信息。</div>`;
   }
@@ -389,6 +569,8 @@ function syncLegendVars() {
   const r = document.documentElement.style;
   r.setProperty("--c-mod", T().module); r.setProperty("--c-file", T().file); r.setProperty("--c-cls", T().class);
   r.setProperty("--c-func", T().function); r.setProperty("--c-ext", T().external); r.setProperty("--c-risk", T().risk);
+  r.setProperty("--c-de", T().domain_entity);
+  r.setProperty("--c-flow", T().flow); r.setProperty("--c-notfired", T().notFired); r.setProperty("--c-unexpected", T().unexpected);
 }
 function applyTheme() {
   document.documentElement.setAttribute("data-theme", theme);

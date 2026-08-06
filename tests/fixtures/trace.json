@@ -1,0 +1,28 @@
+{
+  "traceEvents": [
+    {"ph": "M", "pid": 1, "tid": 1, "name": "process_name", "args": {"name": "voice_agent"}},
+    {"ph": "M", "pid": 1, "tid": 1, "name": "thread_name", "args": {"name": "MainThread"}},
+
+    {"ph": "X", "cat": "FEE", "pid": 1, "tid": 1, "ts": 1000.0, "dur": 200.0,
+     "name": "run (/srv/app/tests/fixtures/voice_agent/main.py:15)",
+     "args": {"func_args": {"frame": "b'\\x00\\x01\\x02'"}, "return_value": "None"}},
+
+    {"ph": "X", "cat": "FEE", "pid": 1, "tid": 1, "ts": 1010.0, "dur": 20.0,
+     "name": "receive_chunk (/srv/app/tests/fixtures/voice_agent/audio_in/stream.py:5)",
+     "args": {"func_args": {"frame": "b'\\x00\\x01\\x02'"}, "return_value": "AudioChunk(pcm=b'\\x00\\x01\\x02', sample_rate=16000, frame_ms=20)"}},
+
+    {"ph": "X", "cat": "FEE", "pid": 1, "tid": 1, "ts": 1040.0, "dur": 10.0,
+     "name": "VADDetector.__init__ (/srv/app/tests/fixtures/voice_agent/audio_in/vad.py:5)",
+     "args": {"func_args": {"self": "<voice_agent.audio_in.vad.VADDetector object at 0x1>", "threshold": "0.5"}, "return_value": "None"}},
+
+    {"ph": "X", "cat": "FEE", "pid": 1, "tid": 1, "ts": 1060.0, "dur": 15.0,
+     "name": "VADDetector.detect (/srv/app/tests/fixtures/voice_agent/audio_in/vad.py:8)",
+     "args": {"func_args": {"self": "<voice_agent.audio_in.vad.VADDetector object at 0x1>", "chunk": "AudioChunk(...)"}, "return_value": "True"}},
+
+    {"ph": "X", "cat": "FEE", "pid": 1, "tid": 1, "ts": 1085.0, "dur": 10.0,
+     "name": "is_utterance_end (/srv/app/tests/fixtures/voice_agent/audio_in/vad.py:13)",
+     "args": {"func_args": {"is_speech": "True", "chunk": "AudioChunk(...)"}, "return_value": "False"}}
+  ],
+  "viztracer_metadata": {"version": "1.1.1"},
+  "file_info": {}
+}

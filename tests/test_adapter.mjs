@@ -4,8 +4,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildIndexes, buildRenderModel, isVisible, neighbors, nodeColor, linkColor,
-  linkWidth, nodeVal, arrowLen, particles, nodeBaseColor, hasRisk, DIM, THEMES,
-  EDGES, TYPES,
+  linkWidth, nodeVal, arrowLen, particles, nodeBaseColor, hasRisk, hasRuntime,
+  linkRuntime, isUnexpectedFlow, DIM, THEMES, EDGES, TYPES, search, riskRank,
+  domainPipeline, dsSubgraph, riskSubgraph,
 } from "../src/flowsight/web/adapter.js";
 
 // A mini graph mirroring the fixture's shape: module > file > class > function.
@@ -90,15 +91,18 @@ test("style-by-type: nodeBaseColor maps each type to its theme color", () => {
 });
 
 test("style-by-type: linkColor/width/arrow/particles follow the edge encoding", () => {
-  const state = { selectedId: null, dim: "dep", neigh: new Set() };
+  const dep = { selectedId: null, dim: "dep", neigh: new Set() };
+  const ds = { selectedId: null, dim: "ds", neigh: new Set() };
   const contains = { type: EDGES.CONTAINS };
   const calls = { type: EDGES.CALLS };
   const transforms = { type: EDGES.TRANSFORMS };
-  assert.equal(linkColor(contains, "dark", state), THEMES.dark.contains);
-  assert.equal(linkColor(calls, "dark", state), THEMES.dark.calls);
-  assert.equal(linkWidth(contains, state), 0.7);
-  assert.equal(linkWidth(calls, state), 1.2);
-  assert.equal(linkWidth(transforms, state), 3);
+  // structural edges are lit in the dep view
+  assert.equal(linkColor(contains, "dark", dep), THEMES.dark.contains);
+  assert.equal(linkColor(calls, "dark", dep), THEMES.dark.calls);
+  assert.equal(linkWidth(contains, dep), 0.7);
+  assert.equal(linkWidth(calls, dep), 1.2);
+  // flow edges are lit in the ds view (dimmed in dep)
+  assert.equal(linkWidth(transforms, ds), 3);
   assert.equal(arrowLen(contains), 0);
   assert.equal(arrowLen(calls), 3.2);
   assert.equal(arrowLen(transforms), 6.5);
@@ -155,4 +159,163 @@ test("external nodes appear only when a visible node imports them", () => {
   m = buildRenderModel(GRAPH, { expanded: exp, state });
   assert.ok(!m.nodes.some((n) => n.id === "ext:requests"));
   assert.ok(!m.links.some((l) => l.type === EDGES.IMPORTS));
+});
+
+// ---- ticket 04: domain entities, four views, ranking, pipeline, search ----
+
+// A domain graph mirroring the voice-agent pipeline: AudioChunk -> Transcript ->
+// LLMMessage -> TTSAudio via produces/consumes/transforms, plus ranked risks.
+const DGRAPH = {
+  project: { name: "voice_agent" },
+  nodes: [
+    { id: "de:AudioChunk", type: "domain_entity", label: "AudioChunk", origin: "llm" },
+    { id: "de:Transcript", type: "domain_entity", label: "Transcript", origin: "llm" },
+    { id: "de:LLMMessage", type: "domain_entity", label: "LLMMessage", origin: "llm" },
+    { id: "de:TTSAudio", type: "domain_entity", label: "TTSAudio", origin: "llm" },
+    { id: "func:receive_chunk", type: "function", label: "receive_chunk", origin: "parser" },
+    { id: "func:transcribe", type: "function", label: "transcribe", origin: "parser",
+      risk: { description: "rm-hi", severity: "high" } },
+    { id: "func:generate", type: "function", label: "generate", origin: "parser",
+      risk: { description: "rm-lo", severity: "low" } },
+    { id: "func:synthesize", type: "function", label: "synthesize", origin: "parser",
+      risk: { description: "rm-md", severity: "medium" } },
+  ],
+  edges: [
+    { source: "func:receive_chunk", target: "de:AudioChunk", type: "produces", origin: "llm" },
+    { source: "func:transcribe", target: "de:AudioChunk", type: "consumes", origin: "llm" },
+    { source: "func:transcribe", target: "de:Transcript", type: "produces", origin: "llm" },
+    { source: "func:generate", target: "de:Transcript", type: "consumes", origin: "llm" },
+    { source: "func:generate", target: "de:LLMMessage", type: "produces", origin: "llm" },
+    { source: "func:synthesize", target: "de:LLMMessage", type: "consumes", origin: "llm" },
+    { source: "func:synthesize", target: "de:TTSAudio", type: "produces", origin: "llm" },
+    { source: "de:AudioChunk", target: "de:Transcript", type: "transforms", origin: "llm" },
+    { source: "de:Transcript", target: "de:LLMMessage", type: "transforms", origin: "llm" },
+    { source: "de:LLMMessage", target: "de:TTSAudio", type: "transforms", origin: "llm" },
+  ],
+};
+
+test("dep view excludes domain_entity nodes and restricts to structural edges", () => {
+  assert.ok(!DIM.dep.nodeOk({ type: TYPES.DOMAIN_ENTITY }));
+  assert.ok(DIM.dep.nodeOk({ type: TYPES.FUNCTION }));
+  assert.ok(DIM.dep.linkOk({ type: EDGES.CALLS }));
+  assert.ok(DIM.dep.linkOk({ type: EDGES.IMPORTS }));
+  assert.ok(!DIM.dep.linkOk({ type: EDGES.TRANSFORMS }));
+  assert.ok(!DIM.dep.linkOk({ type: EDGES.PRODUCES }));
+});
+
+test("dsSubgraph returns domain entities + connected functions + domain edges", () => {
+  const m = dsSubgraph(DGRAPH);
+  const ids = new Set(m.nodes.map((n) => n.id));
+  assert.ok(ids.has("de:AudioChunk"));
+  assert.ok(ids.has("de:TTSAudio"));
+  assert.ok(ids.has("func:receive_chunk"));   // connected via produces
+  assert.ok(ids.has("func:transcribe"));      // connected via consumes/produces
+  // only domain edges (produces/consumes/transforms) appear
+  assert.ok(m.links.every((l) => [EDGES.PRODUCES, EDGES.CONSUMES, EDGES.TRANSFORMS].includes(l.type)));
+  assert.equal(m.links.filter((l) => l.type === EDGES.TRANSFORMS).length, 3);
+});
+
+test("buildRenderModel in ds view returns the ds subgraph (ignores expand state)", () => {
+  const state = { selectedId: null, dim: "ds", neigh: new Set() };
+  const m = buildRenderModel(DGRAPH, { expanded: new Set(), state });
+  assert.ok(m.nodes.some((n) => n.id === "de:AudioChunk"));
+  assert.ok(m.nodes.some((n) => n.id === "func:receive_chunk"));
+  assert.ok(!m.links.some((l) => l.type === EDGES.CALLS));
+});
+
+test("riskSubgraph returns only risk-bearing nodes", () => {
+  const m = riskSubgraph(DGRAPH);
+  assert.equal(m.nodes.length, 3);            // transcribe, generate, synthesize
+  assert.ok(m.nodes.every((n) => n.hasRisk));
+  assert.equal(m.links.length, 0);
+});
+
+test("buildRenderModel in risk view returns only risk nodes", () => {
+  const state = { selectedId: null, dim: "risk", neigh: new Set() };
+  const m = buildRenderModel(DGRAPH, { expanded: new Set(), state });
+  assert.equal(m.nodes.length, 3);
+  assert.ok(m.nodes.every((n) => n.hasRisk));
+});
+
+test("riskRank sorts high > medium > low, then by label", () => {
+  // transcribe=high, synthesize=medium, generate=low
+  const ranked = riskRank(DGRAPH).map((n) => n.label);
+  assert.deepEqual(ranked, ["transcribe", "synthesize", "generate"]);
+});
+
+test("domainPipeline orders entities along the transforms chain (sources first)", () => {
+  const order = domainPipeline(DGRAPH).map((n) => n.label);
+  assert.deepEqual(order, ["AudioChunk", "Transcript", "LLMMessage", "TTSAudio"]);
+});
+
+test("search covers risks and domain entities and tags them", () => {
+  // risk description
+  let r = search(DGRAPH, "rm-hi");
+  assert.ok(r.some((x) => x.id === "func:transcribe" && x.tag === "risk"));
+  // domain entity by name
+  r = search(DGRAPH, "Transcript");
+  assert.ok(r.some((x) => x.id === "de:Transcript" && x.type === TYPES.DOMAIN_ENTITY));
+  // severity is searchable
+  r = search(DGRAPH, "medium");
+  assert.ok(r.some((x) => x.id === "func:synthesize"));
+});
+
+// ---- ticket 05: runtime data-flow overlay (fired / not-fired / unexpected) ----
+
+// runtime helpers
+test("hasRuntime is true only for nodes a trace observed running", () => {
+  assert.ok(hasRuntime({ runtime: { call_count: 3 } }));
+  assert.ok(!hasRuntime({ runtime: { call_count: 0 } }));
+  assert.ok(!hasRuntime({ runtime: {} }));
+  assert.ok(!hasRuntime({}));
+});
+
+// link styling reads attrs.runtime (calls/references) and attrs.expected (data_flow)
+const dep = { selectedId: null, dim: "dep", neigh: new Set() };
+const mkCalls = (rt) => ({ type: EDGES.CALLS, raw: { attrs: rt ? { runtime: rt } : {} } });
+const mkFlow = (expected) => ({ type: EDGES.DATA_FLOW, raw: { attrs: { expected } } });
+
+test("data_flow edge: expected -> flow color, unexpected -> divergence color", () => {
+  assert.equal(linkColor(mkFlow(true), "dark", dep), THEMES.dark.flow);
+  assert.equal(linkColor(mkFlow(false), "dark", dep), THEMES.dark.unexpected);
+  assert.ok(isUnexpectedFlow(mkFlow(false)));
+  assert.ok(!isUnexpectedFlow(mkFlow(true)));
+});
+
+test("calls edge: fired -> normal, not-fired -> dim+thin, untraced -> normal", () => {
+  const fired = mkCalls({ fired: true, call_count: 2 });
+  const cold = mkCalls({ fired: false, call_count: 0 });
+  const untraced = mkCalls(null);  // no trace loaded
+  assert.equal(linkColor(fired, "dark", dep), THEMES.dark.calls);
+  assert.equal(linkWidth(fired, dep), 1.2);
+  assert.equal(linkColor(cold, "dark", dep), THEMES.dark.notFired);
+  assert.equal(linkWidth(cold, dep), 0.5);
+  // without a trace, calls edges keep their normal style (backward compatible)
+  assert.equal(linkColor(untraced, "dark", dep), THEMES.dark.calls);
+  assert.equal(linkWidth(untraced, dep), 1.2);
+  assert.equal(linkRuntime(untraced), null);
+});
+
+test("buildRenderModel carries runtime attrs through to the render model", () => {
+  // run -> a (fired), run -> b (not-fired), run -> c (data_flow, unexpected)
+  const g = {
+    project: { name: "ov" },
+    nodes: [
+      { id: "f:run", type: "function", label: "run", origin: "parser" },
+      { id: "f:a", type: "function", label: "a", origin: "parser", runtime: { call_count: 1 } },
+      { id: "f:b", type: "function", label: "b", origin: "parser" },
+      { id: "f:c", type: "function", label: "c", origin: "parser" },
+    ],
+    edges: [
+      { source: "f:run", target: "f:a", type: "calls", origin: "parser", attrs: { runtime: { fired: true, call_count: 1 } } },
+      { source: "f:run", target: "f:b", type: "calls", origin: "parser", attrs: { runtime: { fired: false, call_count: 0 } } },
+      { source: "f:run", target: "f:c", type: "data_flow", origin: "runtime", attrs: { expected: false, call_count: 1 } },
+    ],
+  };
+  const m = buildRenderModel(g, { expanded: new Set(), state: dep });
+  const byTarget = new Map(m.links.map((l) => [l.target, l]));
+  assert.equal(linkColor(byTarget.get("f:a"), "dark", dep), THEMES.dark.calls);      // fired
+  assert.equal(linkColor(byTarget.get("f:b"), "dark", dep), THEMES.dark.notFired);   // not-fired
+  assert.equal(linkColor(byTarget.get("f:c"), "dark", dep), THEMES.dark.unexpected); // unexpected flow
+  assert.ok(hasRuntime(m.nodes.find((n) => n.id === "f:a").raw));
 });

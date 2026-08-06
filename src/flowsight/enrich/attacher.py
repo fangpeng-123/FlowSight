@@ -1,14 +1,17 @@
-"""Enrichment attacher (decision 04).
+"""Enrichment attacher (decision 04/05).
 
 - Eager: every module gets a one-line ``purpose`` at index time (LLM if
   configured, else the __init__ docstring fallback).
 - Lazy: per-function ``purpose`` + ``contract`` + ``data_flow_role`` + ``risk``
   on drill-down, cached per code-hash so only changed functions re-enrich.
+- Domain entities (ticket 04): the LLM infers ``DomainEntity`` nodes (origin=llm)
+  + ``produces``/``consumes``/``transforms`` edges from a function's inputs/outputs,
+  attached lazily alongside the per-function detail and deduped by name.
 
 LLM-sourced attributes are advisory; parser structure stays trusted. A node's
 ``origin`` remains ``parser`` (its structure is parser-derived); advisory fields
 are tagged via ``attrs["purpose_origin"]`` / their presence so the panel can mark
-them ``llm``.
+them ``llm``. ``DomainEntity`` is the first true ``origin=llm`` node.
 """
 
 from __future__ import annotations
@@ -145,5 +148,87 @@ def _function_prompt(node: S.Node) -> str:
         f"返回 JSON: {{\"purpose\":\"一句话用途\","
         f"\"contract\":{{\"inputs\":\"\",\"outputs\":\"\",\"errors\":\"\",\"boundaries\":\"\"}},"
         f"\"data_flow_role\":\"producer|consumer|transform|none\","
-        f"\"risk\":{{\"category\":\"\",\"severity\":\"high|medium|low\",\"description\":\"\",\"avoidance\":\"\"}}}}"
+        f"\"risk\":{{\"category\":\"\",\"severity\":\"high|medium|low\",\"description\":\"\",\"avoidance\":\"\"}},"
+        f"\"entities\":{{\"produces\":[\"产出的领域实体名\"],\"consumes\":[\"消费的领域实体名\"],"
+        f"\"transforms\":[{{\"from\":\"实体A\",\"to\":\"实体B\"}}]}}}}"
     )
+
+
+# ---------- domain entities (ticket 04) ----------
+#
+# DomainEntity nodes (origin=llm) + produces/consumes/transforms edges are inferred
+# from a function's inputs/outputs by the LLM and attached lazily during per-function
+# enrichment. Entities are cross-cutting (AudioChunk is produced by one function and
+# consumed by another), so they are deduped by canonical name (id=de:<name>) across
+# the whole document. ``attach_entities`` is idempotent: re-running it with the same
+# payload (e.g. on a cache hit) re-creates nothing.
+
+_DE_PREFIX = "de:"
+
+
+def _entity_id(name: str) -> str:
+    return f"{_DE_PREFIX}{name.strip()}"
+
+
+def attach_entities(func: S.Node, doc: S.GraphDocument, payload: dict
+                    ) -> tuple[list[S.Node], list[S.Edge]]:
+    """Attach LLM-inferred DomainEntity nodes + produces/consumes/transforms edges
+    for ``func`` to ``doc``. Returns ``(new_nodes, new_edges)`` - the deltas added
+    this call. Idempotent: a repeated payload adds nothing.
+
+    Payload shape::
+
+        {"entities": {"produces": ["A"], "consumes": ["B"],
+                      "transforms": [{"from": "B", "to": "A"}]}}
+    """
+    ent = payload.get("entities") or {}
+    if not ent:
+        return [], []
+    new_nodes: list[S.Node] = []
+    new_edges: list[S.Edge] = []
+
+    def _edge_key(e: S.Edge) -> tuple:
+        return (e.source, e.target, e.type, e.attrs.get("via", ""))
+
+    def _ensure_entity(name: str) -> S.Node:
+        eid = _entity_id(name)
+        existing = doc.node_by_id(eid)
+        if existing is not None:
+            return existing
+        node = S.Node(id=eid, type=S.DOMAIN_ENTITY, label=name.strip(), origin=S.LLM,
+                      attrs={"inferred": True})
+        doc.nodes.append(node)
+        new_nodes.append(node)
+        return node
+
+    def _ensure_edge(source: str, target: str, etype: str, attrs: dict | None = None) -> None:
+        a = dict(attrs or {})
+        key = (source, target, etype, a.get("via", ""))
+        for e in doc.edges:
+            if _edge_key(e) == key:
+                return
+        edge = S.Edge(source=source, target=target, type=etype, origin=S.LLM, attrs=a)
+        doc.edges.append(edge)
+        new_edges.append(edge)
+
+    for name in ent.get("produces", []) or []:
+        if not (name and name.strip()):
+            continue
+        de = _ensure_entity(name)
+        _ensure_edge(func.id, de.id, S.PRODUCES)
+    for name in ent.get("consumes", []) or []:
+        if not (name and name.strip()):
+            continue
+        de = _ensure_entity(name)
+        _ensure_edge(func.id, de.id, S.CONSUMES)
+    for tf in ent.get("transforms", []) or []:
+        if not isinstance(tf, dict):
+            continue
+        frm, to = tf.get("from"), tf.get("to")
+        if not frm or not to:
+            continue
+        src = _ensure_entity(frm)
+        tgt = _ensure_entity(to)
+        _ensure_edge(src.id, tgt.id, S.TRANSFORMS, {"via": func.id, "via_label": func.label})
+
+    return new_nodes, new_edges

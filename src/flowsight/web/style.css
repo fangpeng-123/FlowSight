@@ -57,6 +57,10 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
   border:1px solid var(--tb-border);border-radius:8px;padding:8px 12px;font-size:11px;}
 #legend .lg{display:flex;align-items:center;gap:7px;color:var(--txt-dim);margin:3px 0;}
 #legend .lg .n{width:10px;height:10px;border-radius:50%;}
+#legend .lg .ln{width:14px;height:2px;border-radius:1px;flex:none;}
+.trace-badge{margin-top:6px;display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--c-flow,#ffc107);
+  background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 8px;}
+.trace-badge .tdot{width:7px;height:7px;border-radius:50%;background:var(--c-flow,#ffc107);flex:none;}
 .hint{position:absolute;bottom:14px;right:14px;z-index:10;color:var(--txt-mute);font-size:11px;pointer-events:none;}
 #status{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;
   color:var(--txt-dim);font-size:14px;text-align:center;padding:40px;z-index:5;pointer-events:none;gap:10px;}

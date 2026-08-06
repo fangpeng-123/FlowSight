@@ -10,7 +10,7 @@
   <div id="topbar">
     <div class="search">
       <span class="ico">⌕</span>
-      <input id="search-input" placeholder="搜索 文件/类/函数/模块/外部依赖…" autocomplete="off" />
+      <input id="search-input" placeholder="搜索 函数/结构体/风险/模块/文件…" autocomplete="off" />
       <div class="search-results" id="search-results"></div>
     </div>
     <div class="dim-tabs">
@@ -31,6 +31,7 @@
       <div id="panel-head">
         <h1 id="project-title">FlowSight</h1>
         <div class="sub" id="project-sub">加载中…</div>
+        <div class="trace-badge" id="trace-badge" style="display:none"></div>
         <div class="sel" id="sel-info">未选中节点 · 显示项目总览</div>
       </div>
       <div id="panel-content"></div>
@@ -40,9 +41,13 @@
       <div class="lg"><span class="n" style="background:var(--c-mod)"></span>模块</div>
       <div class="lg"><span class="n" style="background:var(--c-file)"></span>文件</div>
       <div class="lg"><span class="n" style="background:var(--c-cls)"></span>类</div>
+      <div class="lg"><span class="n" style="background:var(--c-de)"></span>领域实体</div>
       <div class="lg"><span class="n" style="background:var(--c-func)"></span>函数</div>
       <div class="lg"><span class="n" style="background:var(--c-ext)"></span>外部依赖</div>
       <div class="lg"><span class="n" style="background:var(--c-risk)"></span>风险函数</div>
+      <div class="lg"><span class="ln" style="background:var(--c-flow)"></span>运行时数据流</div>
+      <div class="lg"><span class="ln" style="background:var(--c-notfired)"></span>未触发</div>
+      <div class="lg"><span class="ln" style="background:var(--c-unexpected)"></span>异常调用</div>
     </div>
     <div class="hint">单击查看 · 双击展开/收起 · 拖拽旋转 · 滚轮缩放</div>
     <div id="status"><div class="spin"></div><div id="status-text">正在加载 3D 引擎…</div></div>

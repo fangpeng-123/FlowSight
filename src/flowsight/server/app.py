@@ -30,11 +30,14 @@ class GraphState:
     docstring fallback); per-function detail is enriched lazily via /api/enrich.
     """
 
-    def __init__(self, project_path: str):
+    def __init__(self, project_path: str, trace_path: str | None = None):
         self.project_path = project_path
+        self.trace_path = trace_path
+        self.trace_id = os.path.basename(trace_path) if trace_path else ""
         self.cache = EnrichCache(os.path.join(project_path, ".flowsight", "enrich-cache.json"))
         self.llm = from_env()
         self.doc: S.GraphDocument = None  # set by _build
+        self.divergence: dict = {}
         self._payload: dict = {}
         self._build()
 
@@ -42,10 +45,23 @@ class GraphState:
         self.doc = extract(self.project_path)
         enrich_eager(self.doc, self.llm, self.cache)
         self.cache.save()
+        self.divergence = {}
+        if self.trace_path:  # ticket 05: overlay runtime trace onto the skeleton
+            from flowsight.overlay.correlator import apply_overlay, correlate
+            from flowsight.overlay.trace import load_trace
+
+            trace = load_trace(self.trace_path)
+            result = correlate(self.doc, trace, project_root=self.project_path, trace_id=self.trace_id)
+            apply_overlay(self.doc, result)
+            self.divergence = result.divergence
         self._payload = S.doc_to_dict(self.doc)
 
     def reindex(self) -> None:
         self._build()
+
+    def refresh_payload(self) -> None:
+        """Re-serialize the doc after an in-place mutation (lazy enrichment)."""
+        self._payload = S.doc_to_dict(self.doc)
 
     def payload(self) -> dict:
         return self._payload
@@ -72,9 +88,18 @@ def make_handler(state: GraphState):
             if self.path == "/api/graph":
                 self._json(state.payload())
                 return
+            if self.path == "/api/divergence":
+                # ticket 05: actual-on-expected divergence report (not_fired/unexpected/role)
+                self._json({"ok": True, "divergence": state.divergence,
+                            "trace_id": state.trace_id})
+                return
             if self.path.startswith("/api/reindex"):
                 state.reindex()
                 self._json({"ok": True, "nodes": len(state.doc.nodes), "edges": len(state.doc.edges)})
+                return
+            if self.path.startswith("/api/enrich-all"):
+                from flowsight.server.enrich_api import enrich_all
+                enrich_all(self, state)
                 return
             if self.path.startswith("/api/enrich"):
                 # ticket 03 wires the LLM enricher here
@@ -104,13 +129,17 @@ def make_handler(state: GraphState):
     return Handler
 
 
-def serve(project_path: str, port: int = 8000, open_browser: bool = True) -> None:
-    state = GraphState(project_path)
+def serve(project_path: str, port: int = 8000, open_browser: bool = True,
+          trace_path: str | None = None) -> None:
+    state = GraphState(project_path, trace_path=trace_path)
     handler = make_handler(state)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{port}/"
     print(f"FlowSight serving {project_path}", file=sys.stderr)
     print(f"  {len(state.doc.nodes)} nodes, {len(state.doc.edges)} edges", file=sys.stderr)
+    if trace_path:
+        n_df = sum(1 for e in state.doc.edges if e.type == S.DATA_FLOW)
+        print(f"  runtime overlay: {trace_path} ({n_df} data_flow edges)", file=sys.stderr)
     print(f"  open {url}", file=sys.stderr)
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
