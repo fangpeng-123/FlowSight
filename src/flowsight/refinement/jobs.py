@@ -140,7 +140,12 @@ class JobStore:
         ]
         if not matches:
             raise KeyError(f"no refinement exists for subject: {subject_id}")
-        return max(matches, key=lambda status: (status.get("created_at", ""), status["job_id"]))
+        active = [status for status in matches if status.get("status") in ACTIVE | {"pending"}]
+        if active:
+            return max(active, key=lambda status: (status.get("created_at", ""), status["job_id"]))
+        ready = [status for status in matches if status.get("status") == "ready"]
+        pool = ready or matches
+        return max(pool, key=lambda status: (status.get("created_at", ""), status["job_id"]))
 
     def cancel(self, job_id: str) -> dict[str, Any]:
         with self._lock:

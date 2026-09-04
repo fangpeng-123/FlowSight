@@ -265,9 +265,15 @@ def _validate_authorship(request: dict[str, Any], authored: AuthoredArchitecture
         for component_id in component_ids
         if authored.reverse_id_map[component_id] in internal_primary
     }
+    all_internal_components = {
+        component_id for component_id in component_ids
+        if authored.reverse_id_map[component_id] in {
+            node["id"] for node in dossier["nodes"].get("internal", [])
+        }
+    }
     if len(internal_primary) >= 8 and len(selected_internal) < 8:
         raise ValueError("Architecture must curate at least 8 internal primary nodes")
-    if len(selected_internal) > 18:
+    if len(all_internal_components) > 18:
         raise ValueError("Architecture may curate at most 18 internal primary nodes")
     _validate_internal_curation(specification, internal_primary, selected_internal)
     _validate_advisory_presentation(specification)
@@ -315,8 +321,7 @@ def _validate_authorship(request: dict[str, Any], authored: AuthoredArchitecture
     if not runtime_present:
         for card in specification.get("cards", []):
             text = json.dumps(card, ensure_ascii=False).lower()
-            title = str(card.get("title", "")).lower()
-            if ("runtime" in title or "运行" in title) and not any(
+            if any(marker in text for marker in ("runtime", "observed", "运行", "观测")) and not any(
                 marker in text
                 for marker in ("no runtime", "without runtime", "not observed", "未", "无", "省略")
             ):
@@ -346,7 +351,7 @@ def _validate_internal_curation(
 def _validate_advisory_presentation(specification: dict[str, Any]) -> None:
     provenance_markers = (
         "parser", "runtime", "observed", "llm", "advisory", "inferred", "suggested",
-        "解析", "运行", "观测", "建议", "推断", "证据",
+        "解析", "运行", "观测", "建议", "推断",
     )
     for card in specification.get("cards", []):
         title = str(card.get("title", "")).lower()

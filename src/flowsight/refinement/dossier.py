@@ -93,6 +93,7 @@ def build_dossier(
         owner_by_file,
         subject_id,
         policy.max_external_nodes,
+        policy.max_external_subjects,
     )
     allowance_ids = set(allowance)
     allowance_nodes = [
@@ -183,6 +184,7 @@ def _critical_path_allowance(
     owner_by_file: dict[str, ReadingSubject],
     selected_subject_id: str,
     limit: int,
+    subject_limit: int,
 ) -> dict[str, dict[str, Any]]:
     """Expose a bounded evidenced second hop so the Agent can choose after claiming."""
 
@@ -200,7 +202,7 @@ def _critical_path_allowance(
             continue
         node = node_by_id.get(external_id)
         owner = _node_owner(node, owner_by_file) if node else None
-        if owner is None or owner.id == selected_subject_id or owner.id not in selected_owners:
+        if owner is None or owner.id == selected_subject_id:
             continue
         info = allowance.setdefault(external_id, {
             "owner": owner,
@@ -212,7 +214,17 @@ def _critical_path_allowance(
         })
         info["origins"].add(edge["origin"])
     ordered = sorted(allowance, key=lambda node_id: _candidate_key(node_id, allowance[node_id]))
-    return {node_id: allowance[node_id] for node_id in ordered[:limit]}
+    bounded: dict[str, dict[str, Any]] = {}
+    owners = set(selected_owners)
+    for node_id in ordered:
+        owner_id = allowance[node_id]["owner"].id
+        if owner_id not in owners and len(owners) >= subject_limit:
+            continue
+        bounded[node_id] = allowance[node_id]
+        owners.add(owner_id)
+        if len(bounded) >= limit:
+            break
+    return bounded
 
 
 def _owner_index(catalog: ReadingSubjectCatalog) -> dict[str, ReadingSubject]:

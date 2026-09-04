@@ -447,6 +447,33 @@ def test_parser_edge_cannot_be_presented_as_runtime_observation(tmp_path):
     assert "runtime presentation requires runtime evidence" in failed["diagnostic"]
 
 
+def test_card_body_cannot_claim_runtime_observation_without_evidence(tmp_path):
+    project = tmp_path / "project"
+    store = JobStore(project)
+    store.create_request(_dossier(project), event_stream=io.StringIO())
+    authored = _architecture()
+    authored.specification["cards"][0] = {
+        "title": "Parser evidence",
+        "items": ["runtime observed 42 calls"],
+    }
+
+    class ContradictingAuthor:
+        def author(self, request, diagnostic=""):
+            return authored
+
+    failed = RefinementAgent(
+        store,
+        ContradictingAuthor(),
+        FixtureArchify(store),
+        agent_id="fixture-agent",
+        max_repair_rounds=0,
+    ).process_next()
+
+    assert failed is not None
+    assert failed["status"] == "failed"
+    assert "runtime narrative requires runtime evidence" in failed["diagnostic"]
+
+
 def test_runtime_context_must_be_visibly_observed_and_emphasized(tmp_path):
     project = tmp_path / "project"
     store = JobStore(project)

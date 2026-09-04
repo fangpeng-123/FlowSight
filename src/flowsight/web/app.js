@@ -451,6 +451,8 @@ async function pollRefinement(subjectId, jobId, attempt) {
     if (presentation && presentation.busy) {
       const delay = Math.min(1000 + attempt * 100, 5000);
       setTimeout(() => pollRefinement(subjectId, jobId, attempt + 1), delay);
+    } else if (status.status === "failed") {
+      loadCurrentRefinement(subjectId);
     }
   } catch (error) {
     refinements.set(subjectId, { status: "failed", display: error.message });

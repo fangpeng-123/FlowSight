@@ -235,6 +235,25 @@ def test_failed_result_does_not_break_another_ready_artifact(tmp_path):
     assert state.refinements.artifact_path(first["job_id"]).is_file()
 
 
+def test_failed_regeneration_falls_back_to_previous_ready_artifact(tmp_path):
+    state = _state(tmp_path)
+    first = _request(state)
+    state.refinements.claim(first["job_id"], agent_id="fixture-agent")
+    state.refinements.advance(first["job_id"], "generating")
+    state.refinements.advance(first["job_id"], "validating")
+    _stage_fixture(state, first)
+    state.refinements.accept_result(first["job_id"])
+
+    source = Path(state.project_path) / "pkg" / "api" / "routes.py"
+    source.write_text("def route():\n    return 'changed'\n", encoding="utf-8")
+    state.reindex()
+    second = _request(state)
+    state.refinements.claim(second["job_id"], agent_id="fixture-agent")
+    state.refinements.fail(second["job_id"], "generation failed")
+
+    assert state.refinements.latest_status("pkg/api")["job_id"] == first["job_id"]
+
+
 def test_new_result_atomically_replaces_subject_artifact_without_history(tmp_path):
     state = _state(tmp_path)
     first = _request(state)
