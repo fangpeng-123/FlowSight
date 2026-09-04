@@ -11,11 +11,12 @@ import hashlib
 import json
 import os
 import subprocess
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from flowsight.refinement.jobs import JobStore
+from flowsight.refinement.jobs import JobStore, write_json_atomic
 
 MAX_REPAIR_ROUNDS = 2
 
@@ -143,8 +144,11 @@ class RefinementAgent:
             self.store.claim(job_id, agent_id=self.agent_id)
         except ValueError:
             return None
-        request = self.store.read_request(job_id)
-        self.store.advance(job_id, "generating")
+        try:
+            request = self.store.read_request(job_id)
+            self.store.advance(job_id, "generating")
+        except (KeyError, OSError, ValueError) as exc:
+            return self.store.fail(job_id, _bounded(str(exc)))
         diagnostic = ""
         for attempt in range(self.max_repair_rounds + 1):
             try:
@@ -170,7 +174,7 @@ class RefinementAgent:
         job_dir = self.store.job_dir(job_id)
         specification = job_dir / "specification.staged.json"
         artifact = job_dir / "artifact.staged.html"
-        _write_json(specification, authored.specification)
+        write_json_atomic(specification, authored.specification)
         self.store.advance(job_id, "validating")
         return self.archify.deliver(specification, artifact)
 
@@ -193,7 +197,7 @@ class RefinementAgent:
         reverse_map = job_dir / "reverse-id-map.json"
         receipt_path = job_dir / "delivery-receipt.json"
         result_path = job_dir / "result.json"
-        _write_json(reverse_map.with_suffix(".json.staged"), authored.reverse_id_map)
+        write_json_atomic(reverse_map.with_suffix(".json.staged"), authored.reverse_id_map)
         receipt = {
             "success": True,
             "job_id": job_id,
@@ -202,7 +206,7 @@ class RefinementAgent:
             "archify_version": self.archify.version,
             "archify_delivery": archify_receipt,
         }
-        _write_json(receipt_path.with_suffix(".json.staged"), receipt)
+        write_json_atomic(receipt_path.with_suffix(".json.staged"), receipt)
 
         os.replace(staged_specification, final_specification)
         os.replace(staged_artifact, final_artifact)
@@ -218,7 +222,7 @@ class RefinementAgent:
             "reverse_id_map_path": self.store._relative(reverse_map),
             "receipt_path": self.store._relative(receipt_path),
         }
-        _write_json(result_path.with_suffix(".json.staged"), result)
+        write_json_atomic(result_path.with_suffix(".json.staged"), result)
         os.replace(result_path.with_suffix(".json.staged"), result_path)
 
 
@@ -238,7 +242,7 @@ def _validate_authorship(request: dict[str, Any], authored: AuthoredArchitecture
     dossier = request["dossier"]
     evidence_nodes = {
         node["id"]: node
-        for group in ("internal", "boundary")
+        for group in ("internal", "boundary", "critical_path_candidates")
         for node in dossier["nodes"].get(group, [])
     }
     component_ids = {component.get("id") for component in components}
@@ -251,10 +255,27 @@ def _validate_authorship(request: dict[str, Any], authored: AuthoredArchitecture
         if evidence_nodes[node_id].get("origin") not in {"parser", "runtime"}:
             raise ValueError(f"component {component_id!r} is not parser/runtime topology evidence")
 
+    internal_primary = {
+        node["id"]: node
+        for node in dossier["nodes"].get("internal", [])
+        if node.get("type") in {"function", "class"}
+    }
+    selected_internal = {
+        authored.reverse_id_map[component_id]
+        for component_id in component_ids
+        if authored.reverse_id_map[component_id] in internal_primary
+    }
+    if len(internal_primary) >= 8 and len(selected_internal) < 8:
+        raise ValueError("Architecture must curate at least 8 internal primary nodes")
+    if len(selected_internal) > 18:
+        raise ValueError("Architecture may curate at most 18 internal primary nodes")
+    _validate_internal_curation(specification, internal_primary, selected_internal)
+    _validate_advisory_presentation(specification)
+
     _validate_context_presentation(specification, authored.reverse_id_map, dossier)
 
     evidence_edges: dict[tuple[str, str], set[str]] = {}
-    for group in ("internal", "boundary", "external_context"):
+    for group in ("internal", "boundary", "external_context", "critical_path_candidates"):
         for edge in dossier["relationships"].get(group, []):
             if edge.get("origin") in {"parser", "runtime"}:
                 evidence_edges.setdefault((edge["source"], edge["target"]), set()).add(
@@ -268,8 +289,13 @@ def _validate_authorship(request: dict[str, Any], authored: AuthoredArchitecture
                 f"connection {connection.get('from')!r} -> {connection.get('to')!r} "
                 "has no parser/runtime topology evidence"
             )
+        presentation = f"{connection.get('label', '')} {connection.get('variant', '')}".lower()
+        runtime_marked = any(
+            marker in presentation for marker in ("runtime", "observed", "运行", "观测")
+        )
+        if runtime_marked and "runtime" not in evidence_edges[(source, target)]:
+            raise ValueError("runtime presentation requires runtime evidence")
         if "runtime" in evidence_edges[(source, target)]:
-            presentation = f"{connection.get('label', '')} {connection.get('variant', '')}".lower()
             if connection.get("variant") != "emphasis" or not any(
                 marker in presentation for marker in ("runtime", "observed", "运行", "观测")
             ):
@@ -277,7 +303,7 @@ def _validate_authorship(request: dict[str, Any], authored: AuthoredArchitecture
 
     runtime_present = any(node.get("runtime") for node in evidence_nodes.values()) or any(
         edge.get("origin") == "runtime"
-        for group in ("internal", "boundary", "external_context")
+        for group in ("internal", "boundary", "external_context", "critical_path_candidates")
         for edge in dossier["relationships"].get(group, [])
     )
     for view in meta.get("views", []):
@@ -286,6 +312,47 @@ def _validate_authorship(request: dict[str, Any], authored: AuthoredArchitecture
             if not runtime_present:
                 raise ValueError("runtime guided view requires observed runtime evidence")
 
+    if not runtime_present:
+        for card in specification.get("cards", []):
+            text = json.dumps(card, ensure_ascii=False).lower()
+            title = str(card.get("title", "")).lower()
+            if ("runtime" in title or "运行" in title) and not any(
+                marker in text
+                for marker in ("no runtime", "without runtime", "not observed", "未", "无", "省略")
+            ):
+                raise ValueError("runtime narrative requires runtime evidence or an explicit absence label")
+
+
+def _validate_internal_curation(
+    specification: dict[str, Any],
+    internal_primary: dict[str, dict[str, Any]],
+    selected_internal: set[str],
+) -> None:
+    omitted = [node for node_id, node in internal_primary.items() if node_id not in selected_internal]
+    if not omitted:
+        return
+    categories = dict(sorted(Counter(str(node.get("type", "unknown")) for node in omitted).items()))
+    expected_count = len(omitted)
+    narrative = json.dumps(specification.get("cards", []), ensure_ascii=False).lower()
+    if not any(marker in narrative for marker in ("helper", "omitted", "aggregate", "省略", "聚合")):
+        raise ValueError("omitted internal helpers must be visibly acknowledged as an aggregate")
+    if str(expected_count) not in narrative or any(
+        category.lower() not in narrative or str(count) not in narrative
+        for category, count in categories.items()
+    ):
+        raise ValueError("internal helper aggregate must display its exact count and categories")
+
+
+def _validate_advisory_presentation(specification: dict[str, Any]) -> None:
+    provenance_markers = (
+        "parser", "runtime", "observed", "llm", "advisory", "inferred", "suggested",
+        "解析", "运行", "观测", "建议", "推断", "证据",
+    )
+    for card in specification.get("cards", []):
+        title = str(card.get("title", "")).lower()
+        if not any(marker in title for marker in provenance_markers):
+            raise ValueError("every explanatory card must visibly identify parser, LLM, or runtime provenance")
+
 
 def _validate_context_presentation(
     specification: dict[str, Any],
@@ -293,7 +360,14 @@ def _validate_context_presentation(
     dossier: dict[str, Any],
 ) -> None:
     internal_ids = {node["id"] for node in dossier["nodes"].get("internal", [])}
-    context_by_id = {node["id"]: node for node in dossier["nodes"].get("boundary", [])}
+    context_by_id = {
+        node["id"]: node
+        for group in ("boundary", "critical_path_candidates")
+        for node in dossier["nodes"].get(group, [])
+    }
+    candidate_ids = {
+        node["id"] for node in dossier["nodes"].get("critical_path_candidates", [])
+    }
     components = {component["id"]: component for component in specification.get("components", [])}
     boundaries = specification.get("boundaries", [])
 
@@ -328,8 +402,24 @@ def _validate_context_presentation(
         if location_file not in presentation and location_file not in source_paths and not compact_location:
             raise ValueError(f"external context component {component_id!r} must display its source location")
         signature = node.get("signature")
-        if signature and component.get("label") != node.get("label"):
-            raise ValueError(f"external context component {component_id!r} must retain its exact identifier")
+        if signature:
+            if component.get("label") != node.get("label"):
+                raise ValueError(
+                    f"external context component {component_id!r} must retain its exact identifier"
+                )
+            required_signature_tokens = [
+                str(parameter.get(field, ""))
+                for parameter in signature.get("params", [])
+                if isinstance(parameter, dict)
+                for field in ("name", "type")
+                if str(parameter.get(field, ""))
+            ]
+            if signature.get("returns"):
+                required_signature_tokens.append(str(signature["returns"]))
+            if any(token not in presentation for token in required_signature_tokens):
+                raise ValueError(
+                    f"external context component {component_id!r} must display its signature"
+                )
         matching_boundaries = [
             boundary for boundary in boundaries if component_id in boundary.get("wraps", [])
         ]
@@ -354,6 +444,27 @@ def _validate_context_presentation(
         component_id for component_id in components
         if reverse_id_map[component_id] in context_by_id
     }
+    policy = (dossier.get("context") or {}).get("policy") or {}
+    if len(external_components) > int(policy.get("max_external_nodes", 6)):
+        raise ValueError("Architecture exceeds the external primary-node budget")
+    external_owners = {
+        (context_by_id[reverse_id_map[component_id]].get("context") or {}).get("owner", {}).get("id")
+        for component_id in external_components
+    }
+    if len(external_owners) > int(policy.get("max_external_subjects", 2)):
+        raise ValueError("Architecture exceeds the external reading-subject budget")
+    chosen_candidates = [
+        context_by_id[reverse_id_map[component_id]]
+        for component_id in external_components
+        if reverse_id_map[component_id] in candidate_ids
+    ]
+    if chosen_candidates:
+        narrative = json.dumps(specification.get("cards", []), ensure_ascii=False).lower()
+        for node in chosen_candidates:
+            if str(node.get("label", "")).lower() not in narrative or not any(
+                marker in narrative for marker in ("critical", "continuation", "关键", "路径", "延伸")
+            ):
+                raise ValueError("selected critical-path continuation needs a visible justification")
     for boundary in boundaries:
         wraps = set(boundary.get("wraps", []))
         if wraps & internal_components and wraps & external_components:
@@ -373,15 +484,6 @@ def _validate_context_presentation(
             count_visible = str(aggregate.get("node_count", "")) in narrative
             if not owner_visible or not count_visible:
                 raise ValueError("external context overflow must display each owner and omitted count")
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)
 
 
 def _verify_delivery_bytes(

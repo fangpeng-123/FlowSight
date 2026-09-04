@@ -35,12 +35,24 @@ def _display(status: str) -> str:
     }.get(status, status)
 
 
+def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    """Commit one deterministic JSON document with a same-directory replace."""
+
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+
+
 class JobStore:
     """Owns durable request/status files below the project's refinement area."""
 
     def __init__(self, project_root: str | Path):
         self.project_root = Path(project_root).resolve()
         self.root = self.project_root / ".flowsight" / "refinements" / "jobs"
+        self.current_root = self.root.parent / "current"
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
 
@@ -85,8 +97,8 @@ class JobStore:
                 "artifact_available": False,
                 "diagnostic": "",
             }
-            self._write_json(self.request_path(job_id), request)
-            self._write_json(self.status_path(job_id), status)
+            write_json_atomic(self.request_path(job_id), request)
+            write_json_atomic(self.status_path(job_id), status)
 
             event = {
                 "event": "refinement.requested",
@@ -118,6 +130,18 @@ class JobStore:
             raise KeyError(f"unknown job: {job_id}")
         return json.loads(path.read_text(encoding="utf-8"))
 
+    def latest_status(self, subject_id: str) -> dict[str, Any]:
+        """Return the newest visible job for restoring browser state after reload."""
+
+        matches = [
+            status for status in self._statuses()
+            if status.get("subject_id") == subject_id
+            and status.get("status") not in {"cancelled", "stale"}
+        ]
+        if not matches:
+            raise KeyError(f"no refinement exists for subject: {subject_id}")
+        return max(matches, key=lambda status: (status.get("created_at", ""), status["job_id"]))
+
     def cancel(self, job_id: str) -> dict[str, Any]:
         with self._lock:
             status = self.get_status(job_id)
@@ -129,7 +153,7 @@ class JobStore:
                 display=_display("cancelled"),
                 updated_at=_now(),
             )
-            self._write_json(self.status_path(job_id), status)
+            write_json_atomic(self.status_path(job_id), status)
             return status
 
     def pending(self) -> list[dict[str, Any]]:
@@ -211,36 +235,90 @@ class JobStore:
                     raise ValueError("missing result metadata")
                 result = json.loads(result_path.read_text(encoding="utf-8"))
                 self._match_identity(result, status, "result")
+                request = self.read_request(job_id)
+                self._match_identity(request, status, "request")
+                if result.get("diagram_type") != "architecture":
+                    raise ValueError("result is not an Architecture diagram")
                 artifact = self._validated_result_path(job_id, result.get("artifact_path"), "artifact")
                 specification = self._validated_result_path(
                     job_id, result.get("specification_path"), "specification"
+                )
+                reverse_map_path = self._validated_result_path(
+                    job_id, result.get("reverse_id_map_path"), "reverse ID map"
                 )
                 receipt_path = self._validated_result_path(job_id, result.get("receipt_path"), "receipt")
                 if not artifact.is_file():
                     raise ValueError("missing artifact HTML")
                 if not specification.is_file():
                     raise ValueError("missing Archify specification")
+                if not reverse_map_path.is_file():
+                    raise ValueError("missing reverse ID map")
                 if not receipt_path.is_file():
                     raise ValueError("missing delivery receipt")
                 try:
+                    specification_payload = json.loads(specification.read_text(encoding="utf-8"))
+                    reverse_map = json.loads(reverse_map_path.read_text(encoding="utf-8"))
                     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
                 except json.JSONDecodeError as exc:
-                    raise ValueError("invalid delivery receipt") from exc
+                    raise ValueError("invalid refinement result JSON") from exc
+                self._validate_specification_binding(request, specification_payload, reverse_map)
                 self._match_identity(receipt, status, "delivery receipt")
                 if receipt.get("success") is not True:
                     raise ValueError("delivery receipt reports failure")
+                if not str(receipt.get("archify_version", "")).strip():
+                    raise ValueError("delivery receipt is missing the Archify version")
+                delivery = receipt.get("archify_delivery")
+                if not isinstance(delivery, dict) or (
+                    delivery.get("ok") is not True
+                    or delivery.get("command") != "deliver"
+                    or delivery.get("type") != "architecture"
+                ):
+                    raise ValueError("delivery receipt is not an Archify Architecture delivery")
+                validation = delivery.get("validation") or {}
+                if validation.get("errors") != 0 or validation.get("warnings") != 0:
+                    raise ValueError("Archify Architecture delivery has validation findings")
+                self._verify_file_claim(specification, delivery.get("specification"), "specification")
+                self._verify_file_claim(artifact, delivery.get("artifact"), "artifact")
+
+                current_dir = self._current_dir(status["subject_id"])
+                current_dir.mkdir(parents=True, exist_ok=True)
+                current_specification = current_dir / "specification.json"
+                current_reverse_map = current_dir / "reverse-id-map.json"
+                current_receipt = current_dir / "delivery-receipt.json"
+                current_artifact = current_dir / "artifact.html"
+                for source, target in (
+                    (specification, current_specification),
+                    (reverse_map_path, current_reverse_map),
+                    (receipt_path, current_receipt),
+                    (artifact, current_artifact),
+                ):
+                    os.replace(source, target)
                 ready = self._set_status(
                     status,
                     "ready",
                     "ready",
                     artifact_available=True,
-                    artifact_path=self._relative(artifact),
-                    specification_path=self._relative(specification),
-                    receipt_path=self._relative(receipt_path),
+                    artifact_path=self._relative(current_artifact),
+                    specification_path=self._relative(current_specification),
+                    reverse_id_map_path=self._relative(current_reverse_map),
+                    receipt_path=self._relative(current_receipt),
                     artifact_url=f"/api/refinements/{job_id}/artifact",
                     archify_version=str(receipt.get("archify_version", "")),
                     diagnostic="",
                 )
+                for previous in self._statuses():
+                    if (
+                        previous.get("job_id") != job_id
+                        and previous.get("subject_id") == status["subject_id"]
+                        and previous.get("status") == "ready"
+                    ):
+                        self._set_status(
+                            previous,
+                            "stale",
+                            "replaced",
+                            stale_reason=f"replaced by {job_id}",
+                            artifact_available=False,
+                        )
                 self._release_active_claim(job_id)
                 return ready
         except (OSError, KeyError, json.JSONDecodeError, ValueError) as exc:
@@ -256,10 +334,60 @@ class JobStore:
         status = self.get_status(job_id)
         if status.get("status") != "ready" or status.get("artifact_available") is not True:
             raise KeyError("artifact is not registered as ready")
-        path = self._validated_result_path(job_id, status.get("artifact_path"), "artifact")
+        path = self._validated_current_artifact_path(status)
         if not path.is_file():
             raise KeyError("registered artifact is missing")
         return path
+
+    def _current_dir(self, subject_id: str) -> Path:
+        key = hashlib.sha256(subject_id.encode("utf-8")).hexdigest()[:20]
+        return self.current_root / key
+
+    def _validated_current_artifact_path(self, status: dict[str, Any]) -> Path:
+        value = status.get("artifact_path")
+        if not isinstance(value, str) or not value:
+            raise KeyError("registered artifact path is missing")
+        candidate = (self.project_root / value).resolve()
+        expected = (self._current_dir(status["subject_id"]) / "artifact.html").resolve()
+        if candidate != expected:
+            raise KeyError("registered artifact path is invalid")
+        return candidate
+
+    @staticmethod
+    def _verify_file_claim(path: Path, claim: Any, label: str) -> None:
+        if not isinstance(claim, dict):
+            raise ValueError(f"Archify delivery is missing the {label} fingerprint")
+        actual = path.read_bytes()
+        if claim.get("sha256") != hashlib.sha256(actual).hexdigest():
+            raise ValueError(f"{label} SHA-256 mismatch")
+        if claim.get("bytes") != len(actual):
+            raise ValueError(f"{label} byte count mismatch")
+
+    @staticmethod
+    def _validate_specification_binding(
+        request: dict[str, Any], specification: Any, reverse_map: Any
+    ) -> None:
+        if not isinstance(specification, dict) or specification.get("diagram_type") != "architecture":
+            raise ValueError("specification is not an Architecture diagram")
+        if not isinstance(reverse_map, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in reverse_map.items()
+        ):
+            raise ValueError("reverse ID map must be a JSON string map")
+        components = specification.get("components")
+        if not isinstance(components, list) or not components:
+            raise ValueError("Architecture specification has no components")
+        component_ids = {component.get("id") for component in components if isinstance(component, dict)}
+        if None in component_ids or component_ids != set(reverse_map):
+            raise ValueError("reverse ID map does not match Architecture components")
+        dossier = request.get("dossier") or {}
+        evidence_ids = {
+            node.get("id")
+            for group in ("internal", "boundary", "critical_path_candidates")
+            for node in (dossier.get("nodes") or {}).get(group, [])
+            if isinstance(node, dict)
+        }
+        if not set(reverse_map.values()) <= evidence_ids:
+            raise ValueError("reverse ID map contains topology outside the request dossier")
 
     def _find_reusable(self, subject_id: str, fingerprint: str) -> dict[str, Any] | None:
         if not self.root.is_dir():
@@ -294,7 +422,7 @@ class JobStore:
             updated_at=_now(),
             **updates,
         )
-        self._write_json(self.status_path(status["job_id"]), status)
+        write_json_atomic(self.status_path(status["job_id"]), status)
         return status
 
     @staticmethod
@@ -359,12 +487,3 @@ class JobStore:
 
     def _relative(self, path: Path) -> str:
         return path.relative_to(self.project_root).as_posix()
-
-    @staticmethod
-    def _write_json(path: Path, payload: dict[str, Any]) -> None:
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temporary, path)

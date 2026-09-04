@@ -225,16 +225,38 @@ def test_agent_scans_existing_pending_job_and_atomically_publishes_result(tmp_pa
     assert len(author.calls) == 1
     job_dir = store.job_dir(pending["job_id"])
     result = json.loads((job_dir / "result.json").read_text(encoding="utf-8"))
-    receipt = json.loads((job_dir / "delivery-receipt.json").read_text(encoding="utf-8"))
+    receipt = json.loads(
+        (store.project_root / ready["receipt_path"]).read_text(encoding="utf-8")
+    )
     assert result["diagram_type"] == "architecture"
-    assert (job_dir / "artifact.html").is_file()
-    assert (job_dir / "specification.json").is_file()
-    assert json.loads((job_dir / "reverse-id-map.json").read_text(encoding="utf-8")) == {
+    assert store.artifact_path(pending["job_id"]).is_file()
+    assert (store.project_root / ready["specification_path"]).is_file()
+    assert json.loads(
+        (store.project_root / ready["reverse_id_map_path"]).read_text(encoding="utf-8")
+    ) == {
         "route": "function:pkg.api.route"
     }
     assert receipt["success"] is True
     assert receipt["archify_version"] == "fixture-2.17"
     assert receipt["archify_delivery"]["validation"]["checksPassed"] == 9
+
+
+def test_agent_releases_claim_when_immutable_request_is_missing(tmp_path):
+    project = tmp_path / "project"
+    store = JobStore(project)
+    broken, _ = store.create_request(_dossier(project, "pkg/broken"), event_stream=io.StringIO())
+    healthy, _ = store.create_request(_dossier(project, "pkg/healthy"), event_stream=io.StringIO())
+    store.request_path(broken["job_id"]).unlink()
+    agent = RefinementAgent(
+        store, FixtureAuthor(store), FixtureArchify(store), agent_id="fixture-agent"
+    )
+
+    failed = agent.process_next()
+
+    assert failed is not None
+    assert failed["status"] == "failed"
+    claimed = store.claim(healthy["job_id"], agent_id="recovery-agent")
+    assert claimed["status"] == "claimed"
 
 
 def test_claim_is_atomic_across_store_instances_and_pending_order_is_stable(tmp_path):
@@ -333,7 +355,7 @@ def test_agent_accepts_external_context_with_owner_location_and_distinct_boundar
     assert ready["status"] == "ready"
 
 
-@pytest.mark.parametrize("mutation", ["owner", "location", "visual_type", "boundary"])
+@pytest.mark.parametrize("mutation", ["owner", "location", "signature", "visual_type", "boundary"])
 def test_agent_rejects_context_that_hides_ownership_or_module_boundary(tmp_path, mutation):
     project = tmp_path / "project"
     store = JobStore(project)
@@ -344,6 +366,8 @@ def test_agent_rejects_context_that_hides_ownership_or_module_boundary(tmp_path,
         external.pop("tag")
     elif mutation == "location":
         external["sublabel"] = "execute(value: str) -> str · parser"
+    elif mutation == "signature":
+        external["sublabel"] = "execute · pkg/core.py:1 · parser"
     elif mutation == "visual_type":
         external["type"] = "backend"
     else:
@@ -366,6 +390,61 @@ def test_agent_rejects_context_that_hides_ownership_or_module_boundary(tmp_path,
     assert failed["status"] == "failed"
     assert archify.calls == 0
     assert "external context" in failed["diagnostic"]
+
+
+def test_agent_enforces_internal_primary_budget_and_truthful_helper_aggregate(tmp_path):
+    project = tmp_path / "project"
+    store = JobStore(project)
+    dossier = _dossier(project)
+    for index in range(1, 9):
+        dossier["nodes"]["internal"].append({
+            **dossier["nodes"]["internal"][0],
+            "id": f"function:pkg.api.helper_{index}",
+            "label": f"helper_{index}",
+        })
+    store.create_request(dossier, event_stream=io.StringIO())
+
+    class UnderCuratingAuthor:
+        def author(self, request, diagnostic=""):
+            return _architecture()
+
+    failed = RefinementAgent(
+        store,
+        UnderCuratingAuthor(),
+        FixtureArchify(store),
+        agent_id="fixture-agent",
+        max_repair_rounds=0,
+    ).process_next()
+
+    assert failed is not None
+    assert failed["status"] == "failed"
+    assert "at least 8 internal primary nodes" in failed["diagnostic"]
+
+
+def test_parser_edge_cannot_be_presented_as_runtime_observation(tmp_path):
+    project = tmp_path / "project"
+    store = JobStore(project)
+    store.create_request(_dossier_with_external_context(project), event_stream=io.StringIO())
+    authored = _architecture_with_external_context()
+    authored.specification["connections"][0].update(
+        label="runtime observed", variant="emphasis"
+    )
+
+    class SimulatingAuthor:
+        def author(self, request, diagnostic=""):
+            return authored
+
+    failed = RefinementAgent(
+        store,
+        SimulatingAuthor(),
+        FixtureArchify(store),
+        agent_id="fixture-agent",
+        max_repair_rounds=0,
+    ).process_next()
+
+    assert failed is not None
+    assert failed["status"] == "failed"
+    assert "runtime presentation requires runtime evidence" in failed["diagnostic"]
 
 
 def test_runtime_context_must_be_visibly_observed_and_emphasized(tmp_path):

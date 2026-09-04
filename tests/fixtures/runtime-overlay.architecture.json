@@ -63,6 +63,6 @@
     {"dot": "cyan", "title": "职责（LLM 建议）", "items": ["把 VizTracer 事件关联到 parser 图节点", "将实际调用与预期调用的差异写回 GraphDocument"]},
     {"dot": "emerald", "title": "输入与输出（parser 证据）", "items": ["输入：Chrome trace JSON 与 parser skeleton", "输出：带 runtime attrs、data_flow 边和 divergence 的图文档"]},
     {"dot": "amber", "title": "风险（LLM 建议）", "items": ["路径与函数名匹配存在歧义时会产生 unmatched 事件", "参数和返回值日志默认关闭，避免敏感数据泄露"]},
-    {"dot": "slate", "title": "运行证据与有界上下文", "items": ["本次 dossier 未包含命中该模块的 runtime 观测，因此按契约省略运行视图", "外部主节点 3 个，来自 FlowSight Core 与 Local Server；内部其余 helper 聚合省略", "预算外 src/flowsight/skeleton（Skeleton）聚合省略 1 个节点"]}
+    {"dot": "slate", "title": "运行证据与有界上下文", "items": ["本次 dossier 未包含命中该模块的 runtime 观测，因此按契约省略运行视图", "外部主节点 3 个，来自 FlowSight Core 与 Local Server；内部 helper 聚合省略 20 个（function 17，class 3）", "预算外 src/flowsight/skeleton（Skeleton）聚合省略 1 个节点"]}
   ]
 }

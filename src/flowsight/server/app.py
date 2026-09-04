@@ -13,6 +13,7 @@ import sys
 import threading
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 from flowsight import schema as S
 from flowsight.enrich.attacher import enrich_eager, enrich_function
@@ -73,8 +74,20 @@ class GraphState:
     def payload(self) -> dict:
         return self._payload
 
-    def request_refinement(self, subject_id: str, *, event_stream=None) -> dict:
-        dossier = build_dossier(self.doc, self.catalog, subject_id, self.project_path)
+    def request_refinement(
+        self,
+        subject_id: str,
+        *,
+        event_stream=None,
+        critical_path_extensions: dict[str, str] | None = None,
+    ) -> dict:
+        dossier = build_dossier(
+            self.doc,
+            self.catalog,
+            subject_id,
+            self.project_path,
+            critical_path_extensions=critical_path_extensions,
+        )
         status, _created = self.refinements.create_request(dossier, event_stream=event_stream)
         return status
 
@@ -97,6 +110,19 @@ def make_handler(state: GraphState, *, event_stream=None):
             self.wfile.write(body)
 
         def do_GET(self):
+            parsed = urlsplit(self.path)
+            if parsed.path.rstrip("/") == "/api/refinements/current":
+                subject_id = parse_qs(parsed.query).get("subject_id", [""])[0]
+                if not subject_id:
+                    self._json({"ok": False, "error": "subject_id is required"}, 400)
+                    return
+                try:
+                    if not any(subject.id == subject_id for subject in state.catalog.subjects):
+                        raise KeyError(f"unknown reading subject: {subject_id}")
+                    self._json(state.refinements.latest_status(subject_id))
+                except KeyError as exc:
+                    self._json({"ok": False, "error": str(exc)}, 404)
+                return
             if self.path == "/api/graph":
                 self._json(state.payload())
                 return
@@ -154,7 +180,17 @@ def make_handler(state: GraphState, *, event_stream=None):
                 subject_id = body.get("subject_id") if isinstance(body, dict) else None
                 if not isinstance(subject_id, str) or not subject_id:
                     raise ValueError("subject_id is required")
-                status = state.request_refinement(subject_id, event_stream=event_stream)
+                extensions = body.get("critical_path_extensions", {})
+                if not isinstance(extensions, dict) or not all(
+                    isinstance(key, str) and isinstance(value, str)
+                    for key, value in extensions.items()
+                ):
+                    raise ValueError("critical_path_extensions must be a string map")
+                status = state.request_refinement(
+                    subject_id,
+                    event_stream=event_stream,
+                    critical_path_extensions=extensions,
+                )
                 self._json(status, 202)
             except (ValueError, json.JSONDecodeError) as exc:
                 self._json({"ok": False, "error": str(exc)}, 400)

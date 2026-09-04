@@ -13,7 +13,7 @@ from typing import Any, Mapping
 from flowsight import schema as S
 from flowsight.reading_subjects import ReadingSubject, ReadingSubjectCatalog
 
-DOSSIER_CONTRACT_VERSION = 2
+DOSSIER_CONTRACT_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -84,6 +84,20 @@ def build_dossier(
     selected_nodes = [
         _annotate_context(node_by_id[node_id], candidates[node_id]) for node_id in selected_ids
     ]
+    allowance = _critical_path_allowance(
+        evidence_edges,
+        node_by_id,
+        internal_ids,
+        candidates,
+        selected_ids,
+        owner_by_file,
+        subject_id,
+        policy.max_external_nodes,
+    )
+    allowance_ids = set(allowance)
+    allowance_nodes = [
+        _annotate_context(node_by_id[node_id], allowance[node_id]) for node_id in allowance
+    ]
     boundary_edges = [
         edge for edge in evidence_edges
         if (
@@ -109,9 +123,16 @@ def build_dossier(
     ]
     overflow = _overflow(candidates, selected_set, evidence_edges, internal_ids)
     external_files = sorted({_node_path(node) for node in selected_nodes if _node_path(node)})
+    allowance_files = sorted({_node_path(node) for node in allowance_nodes if _node_path(node)})
+    allowance_edges = [
+        edge for edge in evidence_edges
+        if edge["source"] in visible_ids | allowance_ids
+        and edge["target"] in visible_ids | allowance_ids
+        and (edge["source"] in allowance_ids or edge["target"] in allowance_ids)
+    ]
 
     root = Path(project_root).resolve()
-    included_files = list(subject.member_files) + external_files
+    included_files = list(subject.member_files) + sorted(set(external_files + allowance_files))
     source_hashes = {
         relative: hashlib.sha256((root / Path(relative)).read_bytes()).hexdigest()
         for relative in included_files
@@ -125,17 +146,19 @@ def build_dossier(
         "subject": subject.to_dict(),
         "source_scope": {
             "owned_files": list(subject.member_files),
-            "external_files": external_files,
+            "external_files": sorted(set(external_files + allowance_files)),
         },
         "source_hashes": source_hashes,
         "nodes": {
             "internal": [node for node in payload["nodes"] if node["id"] in internal_ids],
             "boundary": selected_nodes,
+            "critical_path_candidates": allowance_nodes,
         },
         "relationships": {
             "internal": internal_edges,
             "boundary": boundary_edges,
             "external_context": context_edges,
+            "critical_path_candidates": allowance_edges,
         },
         "context": {
             "policy": asdict(policy),
@@ -143,11 +166,53 @@ def build_dossier(
             "selected_primary_node_count": len(selected_nodes),
             "omitted_primary_node_count": sum(item["node_count"] for item in overflow),
             "overflow": overflow,
+            "critical_path_candidate_count": len(allowance_nodes),
         },
     }
     canonical = json.dumps(dossier, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     dossier["fingerprint"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return dossier
+
+
+def _critical_path_allowance(
+    edges: list[dict[str, Any]],
+    node_by_id: dict[str, dict[str, Any]],
+    internal_ids: set[str],
+    direct_candidates: dict[str, dict[str, Any]],
+    selected_ids: list[str],
+    owner_by_file: dict[str, ReadingSubject],
+    selected_subject_id: str,
+    limit: int,
+) -> dict[str, dict[str, Any]]:
+    """Expose a bounded evidenced second hop so the Agent can choose after claiming."""
+
+    selected = set(selected_ids)
+    selected_owners = {direct_candidates[node_id]["owner"].id for node_id in selected_ids}
+    allowance: dict[str, dict[str, Any]] = {}
+    for edge in edges:
+        if edge["source"] in selected:
+            external_id = edge["target"]
+        elif edge["target"] in selected:
+            external_id = edge["source"]
+        else:
+            continue
+        if external_id in internal_ids or external_id in direct_candidates:
+            continue
+        node = node_by_id.get(external_id)
+        owner = _node_owner(node, owner_by_file) if node else None
+        if owner is None or owner.id == selected_subject_id or owner.id not in selected_owners:
+            continue
+        info = allowance.setdefault(external_id, {
+            "owner": owner,
+            "node_type": node.get("type", "unknown"),
+            "hop": 2,
+            "directions": {"critical-path"},
+            "origins": set(),
+            "justification": "Agent-selectable evidenced continuation",
+        })
+        info["origins"].add(edge["origin"])
+    ordered = sorted(allowance, key=lambda node_id: _candidate_key(node_id, allowance[node_id]))
+    return {node_id: allowance[node_id] for node_id in ordered[:limit]}
 
 
 def _owner_index(catalog: ReadingSubjectCatalog) -> dict[str, ReadingSubject]:

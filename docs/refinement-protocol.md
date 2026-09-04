@@ -7,7 +7,9 @@ the source of truth.
 ## Browser API
 
 - `POST /api/refinements` with `{"subject_id":"flowsight/server"}` creates or
-  reuses a request and returns HTTP 202 with its current status.
+  reuses a request and returns HTTP 202 with its current status. An optional
+  `critical_path_extensions` string map can name evidenced continuation nodes
+  and explain why each extra hop is needed.
 - `GET /api/refinements/<job-id>` returns the durable status.
 - `DELETE /api/refinements/<job-id>` cancels only a pending job.
 
@@ -22,8 +24,10 @@ remain independent.
   request.json     immutable request, dossier, fingerprint, source scope
   status.json      mutable state presented to the browser
   result.json      Agent result metadata
+  staged/final Agent outputs before acceptance
+.flowsight/refinements/current/<subject-hash>/
   specification.json
-  artifact.html
+  artifact.html    atomically replaced current artifact
   reverse-id-map.json
   delivery-receipt.json
 ```
@@ -31,9 +35,11 @@ remain independent.
 The dossier contains the selected subject, owned file scope and hashes,
 internal graph facts, bounded cross-subject facts, signatures, contracts,
 risks, runtime evidence, locations, and origin tags. It contains no source
-text. Contract version 2 adds `source_scope.external_files`,
+text. Contract version 3 includes `source_scope.external_files`,
 `relationships.external_context`, and the context policy/selection/overflow
-summary; existing `nodes.boundary` and `relationships.boundary` remain the
+summary. It also carries a bounded `nodes.critical_path_candidates` allowance
+so the Agent can choose an evidenced second hop after claiming the immutable
+request. Existing `nodes.boundary` and `relationships.boundary` remain the
 compatibility names for selected one-hop context.
 
 FlowSight commits `request.json` and `status.json` before emitting one compact
@@ -96,7 +102,10 @@ identifiers, and sit in owner-labelled external boundaries separate from the
 selected subject. Runtime edges additionally require an observed label and
 emphasis styling; a runtime view is still forbidden without runtime evidence.
 If the dossier contains overflow, an owner-and-count aggregate must appear in
-the artifact cards.
+the artifact cards. Internal primary components are curated to 8–18 when the
+subject contains at least eight candidates; omitted helpers are represented by
+a visible exact count and category aggregate. Explanatory responsibility,
+contract, and risk cards must be visibly marked as LLM advice.
 
 ## Result acceptance
 
@@ -105,8 +114,11 @@ The state path is `pending → claimed → generating → validating → ready`,
 to 1000 characters.
 
 FlowSight registers a result only while the job is validating and only when the
-result and delivery receipt match its job ID, subject ID, and input fingerprint;
-the receipt reports success; and the specification, receipt, and HTML paths all
-exist inside that job directory. A ready artifact is served only from
+request, result, and delivery receipt match its job ID, subject ID, and input
+fingerprint. It independently verifies the Archify command/type, zero validation
+findings, exact specification/artifact SHA-256 and byte counts, Architecture
+component reverse mappings, and dossier topology before promotion. The accepted
+files replace the subject's stable current artifact; the previous job becomes
+`stale` and no historical HTML is retained. A ready artifact is served only from
 `GET /api/refinements/<job-id>/artifact`. Filesystem paths supplied by a browser
 are never accepted.

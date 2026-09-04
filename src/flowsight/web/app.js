@@ -18,6 +18,7 @@ let state = { selectedId: null, neigh: new Set(), dim: "dep" };
 let expanded = new Set();
 let theme = "dark";
 const refinements = new Map();
+const refinementLoads = new Set();
 const T = () => THEMES[theme];
 
 let Graph = null;
@@ -166,7 +167,7 @@ function applyGraphBg() {
   try { const sc = Graph.scene(); if (sc) sc.background = new THREE.Color(c); } catch (e) {}
 }
 
-function refreshGraph() {
+function refreshGraph({ resume = true } = {}) {
   if (!Graph) return;
   applyGraphBg();
   Graph.nodeColor((n) => nodeColor(n.raw, theme, state))
@@ -174,7 +175,7 @@ function refreshGraph() {
     .linkColor((l) => linkColor(l, theme, state))
     .linkWidth((l) => linkWidth(l, state))
     .linkDirectionalParticleColor(() => T().flow);
-  try { Graph.resumeAnimation && Graph.resumeAnimation(); } catch (e) {}
+  if (resume) { try { Graph.resumeAnimation && Graph.resumeAnimation(); } catch (e) {} }
   Graph.refresh();
 }
 
@@ -321,9 +322,16 @@ function enrichAllBtn() {
 function deepReadBtn(node) {
   const action = deepReadAction(node);
   if (!action) return "";
-  const current = refinements.get(action.subjectId);
-  const presentation = refinementPresentation(current);
   const encodedId = encodeURIComponent(action.subjectId).replace(/'/g, "%27");
+  const current = refinements.get(action.subjectId);
+  if (!current && !refinementLoads.has(action.subjectId)) {
+    loadCurrentRefinement(action.subjectId);
+    return `<button class="exp-btn deep-read-btn" disabled>Checking deep read…</button>`;
+  }
+  const presentation = refinementPresentation(current);
+  if (current && current.status === "pending") {
+    return `<button class="exp-btn deep-read-btn" onclick="cancelDeepRead(decodeURIComponent('${encodedId}'), '${current.job_id}')">Cancel pending deep read</button>`;
+  }
   if (presentation && presentation.busy) {
     return `<button class="exp-btn deep-read-btn" disabled>${presentation.label}</button>`;
   }
@@ -332,6 +340,27 @@ function deepReadBtn(node) {
   }
   return `<button class="exp-btn deep-read-btn" onclick="requestDeepRead(decodeURIComponent('${encodedId}'))">${action.label}</button>`;
 }
+
+async function loadCurrentRefinement(subjectId) {
+  refinementLoads.add(subjectId);
+  try {
+    const response = await fetch(`/api/refinements/current?subject_id=${encodeURIComponent(subjectId)}`);
+    refinements.set(subjectId, response.ok ? await response.json() : { status: "missing" });
+  } catch (error) {
+    refinements.set(subjectId, { status: "failed", display: error.message });
+  } finally {
+    refinementLoads.delete(subjectId);
+    if (state.selectedId) renderPanel(state.selectedId);
+  }
+}
+
+async function cancelDeepRead(subjectId, jobId) {
+  const response = await fetch(`/api/refinements/${encodeURIComponent(jobId)}`, { method: "DELETE" });
+  const status = await response.json();
+  refinements.set(subjectId, response.ok ? status : { status: "failed", display: status.error });
+  if (state.selectedId) renderPanel(state.selectedId);
+}
+window.cancelDeepRead = cancelDeepRead;
 
 async function requestDeepRead(subjectId) {
   try {
@@ -401,10 +430,10 @@ function closeDeepRead() {
   state.neigh = snapshot.selectedId ? neighbors(graph, snapshot.selectedId) : new Set();
   theme = snapshot.theme;
   document.documentElement.dataset.theme = theme;
+  applyTheme({ preserveCamera: true });
   if (Graph && snapshot.camera) {
     Graph.cameraPosition(snapshot.camera.position, snapshot.camera.target, 0);
   }
-  applyTheme();
   renderPanel(state.selectedId);
   document.getElementById("panel-content").scrollTop = snapshot.panelScrollTop;
   deepReadSnapshot = null;
@@ -412,7 +441,6 @@ function closeDeepRead() {
 document.getElementById("deep-read-back").addEventListener("click", closeDeepRead);
 
 async function pollRefinement(subjectId, jobId, attempt) {
-  if (attempt >= 120) return;
   try {
     const response = await fetch(`/api/refinements/${encodeURIComponent(jobId)}`);
     const status = await response.json();
@@ -421,7 +449,8 @@ async function pollRefinement(subjectId, jobId, attempt) {
     if (state.selectedId) renderPanel(state.selectedId);
     const presentation = refinementPresentation(status);
     if (presentation && presentation.busy) {
-      setTimeout(() => pollRefinement(subjectId, jobId, attempt + 1), 1000);
+      const delay = Math.min(1000 + attempt * 100, 5000);
+      setTimeout(() => pollRefinement(subjectId, jobId, attempt + 1), delay);
     }
   } catch (error) {
     refinements.set(subjectId, { status: "failed", display: error.message });
@@ -691,10 +720,10 @@ function syncLegendVars() {
   r.setProperty("--c-de", T().domain_entity);
   r.setProperty("--c-flow", T().flow); r.setProperty("--c-notfired", T().notFired); r.setProperty("--c-unexpected", T().unexpected);
 }
-function applyTheme() {
+function applyTheme({ preserveCamera = false } = {}) {
   document.documentElement.setAttribute("data-theme", theme);
   document.getElementById("theme-toggle").textContent = theme === "dark" ? "🌙 暗色" : "☀️ 亮色";
-  syncLegendVars(); refreshGraph(); renderPanel(state.selectedId);
+  syncLegendVars(); refreshGraph({ resume: !preserveCamera }); renderPanel(state.selectedId);
 }
 document.getElementById("theme-toggle").addEventListener("click", () => { theme = theme === "dark" ? "light" : "dark"; applyTheme(); });
 document.getElementById("panel-toggle").addEventListener("click", () => document.getElementById("panel").classList.toggle("collapsed"));

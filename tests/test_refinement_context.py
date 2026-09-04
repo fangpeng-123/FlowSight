@@ -8,6 +8,7 @@ import pytest
 
 from flowsight import schema as S
 from flowsight.reading_subjects import ReadingSubject, ReadingSubjectCatalog
+from flowsight.refinement.agent import AuthoredArchitecture, _validate_authorship
 from flowsight.refinement.dossier import ContextPolicy, build_dossier
 
 
@@ -80,6 +81,9 @@ def test_direct_context_preserves_owner_signature_location_and_direction(tmp_pat
     assert "core-1" in ids
     assert "core-2" in ids
     assert "core-deep" not in ids
+    assert {node["id"] for node in dossier["nodes"]["critical_path_candidates"]} == {
+        "core-deep"
+    }
     caller = next(node for node in context if node["id"] == "core-1")
     callee = next(node for node in context if node["id"] == "core-2")
     assert caller["context"]["owner"] == {"id": "pkg/core", "label": "Core"}
@@ -110,6 +114,47 @@ def test_justified_critical_path_can_extend_beyond_one_hop(tmp_path):
         edge["source"] == "core-2" and edge["target"] == "core-deep"
         for edge in dossier["relationships"]["external_context"]
     )
+
+
+def test_agent_can_choose_bounded_critical_path_after_request_is_frozen(tmp_path):
+    project, doc, catalog = _fixture(tmp_path)
+    dossier = build_dossier(doc, catalog, "pkg/api", project)
+    dossier["context"]["overflow"] = []
+    dossier["context"]["omitted_primary_node_count"] = 0
+    request = {"dossier": dossier}
+    authored = AuthoredArchitecture(
+        specification={
+            "diagram_type": "architecture",
+            "schema_version": 1,
+            "meta": {"quality_profile": "showcase", "views": []},
+            "components": [
+                {"id": "api", "type": "backend", "label": "route", "sublabel": "parser"},
+                {
+                    "id": "normalize",
+                    "type": "external",
+                    "label": "normalize",
+                    "sublabel": "normalize(value: str) -> str · pkg/core/service.py:80 · parser",
+                    "tag": "Core · pkg/core",
+                },
+            ],
+            "boundaries": [
+                {"kind": "region", "label": "内部 · Public API", "wraps": ["api"]},
+                {
+                    "kind": "region",
+                    "label": "外部上下文 · Core · pkg/core",
+                    "wraps": ["normalize"],
+                },
+            ],
+            "connections": [],
+            "cards": [{
+                "title": "Critical path continuation (parser evidence)",
+                "items": ["normalize continues the selected path after the direct boundary."],
+            }],
+        },
+        reverse_id_map={"api": "api", "normalize": "core-deep"},
+    )
+
+    _validate_authorship(request, authored)
 
 
 def test_context_budgets_choose_two_strongest_subjects_and_aggregate_overflow(tmp_path):
@@ -146,4 +191,3 @@ def test_unconnected_or_unjustified_extension_is_rejected(tmp_path):
             doc, catalog, "pkg/api", project,
             critical_path_extensions={"isolated": "Looks useful but is disconnected."},
         )
-

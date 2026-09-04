@@ -27,7 +27,8 @@ def _project(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     (project / "pkg" / "core" / "service.py").write_text(
-        "def execute(name: str) -> str:\n    return name.upper()\n",
+        "def normalize(name: str) -> str:\n    return name.upper()\n\n"
+        "def execute(name: str) -> str:\n    return normalize(name)\n",
         encoding="utf-8",
     )
     (project / ".flowsight").mkdir()
@@ -141,6 +142,24 @@ def test_browser_request_to_waiting_status_end_to_end(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_http_request_accepts_evidenced_critical_path_extension(tmp_path):
+    project = _project(tmp_path)
+    state = GraphState(str(project))
+    extension_id = next(node.id for node in state.doc.nodes if node.label == "normalize")
+
+    status = state.request_refinement(
+        "pkg/api",
+        event_stream=io.StringIO(),
+        critical_path_extensions={extension_id: "Keeps the evidenced call path explicit."},
+    )
+
+    request = json.loads(state.refinements.request_path(status["job_id"]).read_text(encoding="utf-8"))
+    extension = next(
+        node for node in request["dossier"]["nodes"]["boundary"] if node["id"] == extension_id
+    )
+    assert extension["context"]["justification"] == "Keeps the evidenced call path explicit."
 
 
 def test_request_rejects_unknown_subject_and_pending_job_can_be_cancelled(tmp_path):
