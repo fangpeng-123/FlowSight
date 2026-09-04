@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,7 @@ def _subject(**overrides) -> dict:
         "label": "Public API",
         "root": "pkg/api",
         "member_files": ["pkg/api/__init__.py", "pkg/api/routes.py"],
+        "exclusions": [],
         "rationale": "Owns HTTP entry points.",
         "locked": False,
     }
@@ -67,6 +69,7 @@ def test_fixture_catalog_reaches_graph_payload_without_replacing_parser_structur
         "label": "Public API",
         "root": "pkg/api",
         "member_files": ["pkg/api/__init__.py", "pkg/api/routes.py"],
+        "exclusions": [],
         "rationale": "Owns HTTP entry points.",
         "locked": True,
     }
@@ -78,6 +81,7 @@ def test_fixture_catalog_reaches_graph_payload_without_replacing_parser_structur
         ([_subject(), _subject(label="Duplicate")], "duplicate subject id"),
         ([_subject(member_files=["pkg/api/missing.py"])], "missing member file"),
         ([_subject(member_files=["../outside.py"])], "outside the project"),
+        ([_subject(id=".git", root=".git")], "excluded by project policy"),
         (
             [
                 _subject(),
@@ -106,7 +110,7 @@ def test_subject_id_is_the_normalized_project_relative_root(tmp_path):
         load_catalog(project)
 
 
-def test_locked_subject_survives_agent_catalog_refresh(tmp_path):
+def test_locked_subject_survives_agent_catalog_refresh_and_process_restart(tmp_path):
     project = _write_project(tmp_path, _catalog(_subject(locked=True)))
     state = GraphState(str(project))
     refreshed_path = project / ".flowsight" / "reading-subjects.json"
@@ -119,14 +123,38 @@ def test_locked_subject_survives_agent_catalog_refresh(tmp_path):
     module = next(n for n in state.payload()["nodes"] if n["id"] == "mod:pkg.api")
     assert module["attrs"]["reading_subject"]["locked"] is True
 
+    restarted = GraphState(str(project))
+    assert [subject.id for subject in restarted.catalog.subjects] == ["pkg/api"]
 
-def test_apply_catalog_rejects_a_root_without_a_parser_module(tmp_path):
-    project = _write_project(tmp_path, _catalog(_subject(id="pkg/api/group", root="pkg/api/group")))
-    (project / "pkg" / "api" / "group").mkdir()
+
+def test_non_package_subject_root_maps_to_member_file_nodes(tmp_path):
+    project = _write_project(tmp_path)
+    group = project / "pkg" / "api" / "group"
+    group.mkdir()
+    (group / "handler.py").write_text("def handle():\n    pass\n", encoding="utf-8")
+    catalog_path = project / ".flowsight" / "reading-subjects.json"
+    catalog_path.parent.mkdir()
+    catalog_path.write_text(
+        json.dumps(
+            _catalog(
+                _subject(
+                    id="pkg/api/group",
+                    root="pkg/api/group",
+                    member_files=["pkg/api/group/handler.py"],
+                )
+            )
+        ),
+        encoding="utf-8",
+    )
     catalog = load_catalog(project)
 
-    with pytest.raises(CatalogValidationError, match="does not map to a parser module"):
-        apply_catalog(extract(project), catalog)
+    doc = extract(project)
+    apply_catalog(doc, catalog)
+
+    handler = doc.node_by_id("file:pkg/api/group/handler.py")
+    assert handler is not None
+    assert handler.origin == "parser"
+    assert handler.attrs["reading_subject"]["id"] == "pkg/api/group"
 
 
 def test_missing_catalog_is_backward_compatible(tmp_path):
@@ -135,3 +163,29 @@ def test_missing_catalog_is_backward_compatible(tmp_path):
     catalog = load_catalog(project)
 
     assert catalog == ReadingSubjectCatalog(version=1, subjects=())
+
+
+def test_fixture_catalog_payload_reaches_browser_action_model(tmp_path):
+    project = _write_project(tmp_path, json.loads(FIXTURE_CATALOG.read_text(encoding="utf-8")))
+    payload_path = tmp_path / "graph.json"
+    payload_path.write_text(json.dumps(GraphState(str(project)).payload()), encoding="utf-8")
+    adapter_uri = (Path(__file__).parents[1] / "src" / "flowsight" / "web" / "adapter.js").as_uri()
+    script = f"""
+      import {{ deepReadAction }} from {json.dumps(adapter_uri)};
+      import {{ readFileSync }} from 'node:fs';
+      const graph = JSON.parse(readFileSync(process.argv[1], 'utf8'));
+      const module = graph.nodes.find((node) => node.id === 'mod:pkg.api');
+      process.stdout.write(JSON.stringify(deepReadAction(module)));
+    """
+
+    completed = subprocess.run(
+        ["node", "--input-type=module", "-e", script, str(payload_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout) == {
+        "subjectId": "pkg/api",
+        "label": "Deep read this module",
+    }

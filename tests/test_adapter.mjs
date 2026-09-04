@@ -182,6 +182,15 @@ test("deep-read action exists only for a subject-backed module", () => {
   assert.equal(deepReadAction(file), null);
 });
 
+test("a non-package reading subject can use its parser file as the action anchor", () => {
+  const file = {
+    id: "file:pkg/handlers/run.py", type: TYPES.FILE, label: "run.py", origin: "parser",
+    attrs: { reading_subject: { id: "pkg/handlers", label: "Handlers", root: "pkg/handlers" } },
+  };
+
+  assert.equal(deepReadAction(file).subjectId, "pkg/handlers");
+});
+
 // ---- ticket 04: domain entities, four views, ranking, pipeline, search ----
 
 // A domain graph mirroring the voice-agent pipeline: AudioChunk -> Transcript ->

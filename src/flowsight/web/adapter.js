@@ -99,7 +99,7 @@ export function neighbors(graph, nodeId) {
 // action remains separate from selection; issue #4 wires this intent to a
 // durable refinement request.
 export function deepReadAction(node) {
-  const subject = node && node.type === TYPES.MODULE && node.attrs && node.attrs.reading_subject;
+  const subject = node && node.attrs && node.attrs.reading_subject;
   if (!subject || !subject.id) return null;
   return { subjectId: subject.id, label: "Deep read this module" };
 }

@@ -9,6 +9,7 @@
         "pkg/api/__init__.py",
         "pkg/api/routes.py"
       ],
+      "exclusions": [],
       "rationale": "Owns HTTP entry points.",
       "locked": true
     }
