@@ -2,11 +2,12 @@
 // Run: node --test tests/test_adapter.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   buildIndexes, buildRenderModel, isVisible, neighbors, nodeColor, linkColor,
   linkWidth, nodeVal, arrowLen, particles, nodeBaseColor, hasRisk, hasRuntime,
   linkRuntime, isUnexpectedFlow, DIM, THEMES, EDGES, TYPES, search, riskRank,
-  domainPipeline, dsSubgraph, riskSubgraph,
+  domainPipeline, dsSubgraph, riskSubgraph, deepReadAction,
 } from "../src/flowsight/web/adapter.js";
 
 // A mini graph mirroring the fixture's shape: module > file > class > function.
@@ -159,6 +160,26 @@ test("external nodes appear only when a visible node imports them", () => {
   m = buildRenderModel(GRAPH, { expanded: exp, state });
   assert.ok(!m.nodes.some((n) => n.id === "ext:requests"));
   assert.ok(!m.links.some((l) => l.type === EDGES.IMPORTS));
+});
+
+test("deep-read action exists only for a subject-backed module", () => {
+  const fixtureCatalog = JSON.parse(readFileSync(
+    new URL("./fixtures/reading-subjects.json", import.meta.url), "utf8",
+  ));
+  const subject = fixtureCatalog.subjects[0];
+  const backed = {
+    id: "mod:pkg.api", type: TYPES.MODULE, label: "api", origin: "parser",
+    attrs: { reading_subject: subject },
+  };
+  const plainModule = { id: "mod:pkg", type: TYPES.MODULE, label: "pkg", origin: "parser" };
+  const file = { id: "file:pkg/api.py", type: TYPES.FILE, label: "api.py", origin: "parser" };
+
+  assert.deepEqual(deepReadAction(backed), {
+    subjectId: subject.id,
+    label: "Deep read this module",
+  });
+  assert.equal(deepReadAction(plainModule), null);
+  assert.equal(deepReadAction(file), null);
 });
 
 // ---- ticket 04: domain entities, four views, ranking, pipeline, search ----

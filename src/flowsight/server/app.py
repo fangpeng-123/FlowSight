@@ -18,6 +18,7 @@ from flowsight import schema as S
 from flowsight.enrich.attacher import enrich_eager, enrich_function
 from flowsight.enrich.cache import EnrichCache
 from flowsight.enrich.llm import from_env
+from flowsight.reading_subjects import ReadingSubjectCatalog, apply_catalog, load_catalog
 from flowsight.skeleton.extractor import extract
 
 WEB_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "web"))
@@ -36,6 +37,7 @@ class GraphState:
         self.trace_id = os.path.basename(trace_path) if trace_path else ""
         self.cache = EnrichCache(os.path.join(project_path, ".flowsight", "enrich-cache.json"))
         self.llm = from_env()
+        self.catalog = ReadingSubjectCatalog()
         self.doc: S.GraphDocument = None  # set by _build
         self.divergence: dict = {}
         self._payload: dict = {}
@@ -43,6 +45,8 @@ class GraphState:
 
     def _build(self) -> None:
         self.doc = extract(self.project_path)
+        self.catalog = load_catalog(self.project_path, previous=self.catalog)
+        apply_catalog(self.doc, self.catalog)
         enrich_eager(self.doc, self.llm, self.cache)
         self.cache.save()
         self.divergence = {}

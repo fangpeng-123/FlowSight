@@ -95,6 +95,15 @@ export function neighbors(graph, nodeId) {
   return s;
 }
 
+// Reading subjects are advisory metadata on parser-derived module nodes.  The
+// action remains separate from selection; issue #4 wires this intent to a
+// durable refinement request.
+export function deepReadAction(node) {
+  const subject = node && node.type === TYPES.MODULE && node.attrs && node.attrs.reading_subject;
+  if (!subject || !subject.id) return null;
+  return { subjectId: subject.id, label: "Deep read this module" };
+}
+
 // ---- the four views = data subsets over one schema (decision 05) ----
 // dep: structural skeleton (calls/imports/contains/references + runtime data_flow overlay);
 //      domain_entity nodes are advisory and belong to the ds view, so dim them here.

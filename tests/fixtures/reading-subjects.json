@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "subjects": [
+    {
+      "id": "pkg/api",
+      "label": "Public API",
+      "root": "pkg/api",
+      "member_files": [
+        "pkg/api/__init__.py",
+        "pkg/api/routes.py"
+      ],
+      "rationale": "Owns HTTP entry points.",
+      "locked": true
+    }
+  ]
+}

@@ -9,7 +9,7 @@
 import {
   buildIndexes, buildRenderModel, neighbors, nodeColor, linkColor, linkWidth,
   nodeVal, arrowLen, particles, nodeBaseColor, hasRisk, THEMES, TYPES, EDGES,
-  search, topLevelModules, riskRank, domainPipeline,
+  search, topLevelModules, riskRank, domainPipeline, deepReadAction,
 } from "./adapter.js";
 
 let graph = null;
@@ -315,6 +315,21 @@ function enrichAllBtn() {
   return `<button class="exp-btn" onclick="enrichAll()">✦ 富化全部函数（推断领域实体与风险）</button>`;
 }
 
+function deepReadBtn(node) {
+  const action = deepReadAction(node);
+  if (!action) return "";
+  const encodedId = encodeURIComponent(action.subjectId).replace(/'/g, "%27");
+  return `<button class="exp-btn deep-read-btn" onclick="requestDeepRead(decodeURIComponent('${encodedId}'))">${action.label}</button>`;
+}
+
+function requestDeepRead(subjectId) {
+  // A deliberate intent seam for issue #4.  Selection alone never emits this.
+  window.dispatchEvent(new CustomEvent("flowsight:deep-read-requested", {
+    detail: { subjectId },
+  }));
+}
+window.requestDeepRead = requestDeepRead;
+
 // ---- runtime overlay card (ticket 05) ----
 // Per-function runtime stats captured by a viztracer trace: call_count, timings,
 // and sampled arg/return value reprs. Shown only when a trace observed the
@@ -508,7 +523,12 @@ function renderPanel(sel) {
     let h = secOpen("dep", "模块概览", T().module);
     h += `<div class="card"><div class="t">${n.label}</div><div class="kv"><span class="k">dotted</span><span class="v">${n.attrs && n.attrs.dotted || n.label}</span></div>`;
     if (n.purpose) h += `<div class="kv"><span class="k">用途</span><span class="v">${n.purpose} ${trustPill(n.attrs && n.attrs.purpose_origin === "llm" ? "llm" : "parser")}</span></div>`;
-    h += `<div class="kv"><span class="k">成员</span><span class="v">文件 ${files.length} · 子模块 ${subMods.length}</span></div></div>${expandBtn(sel)}</div>`;
+    const subject = n.attrs && n.attrs.reading_subject;
+    h += `<div class="kv"><span class="k">成员</span><span class="v">文件 ${files.length} · 子模块 ${subMods.length}</span></div>`;
+    if (subject) {
+      h += `<div class="kv"><span class="k">阅读主题</span><span class="v">${subject.label}<br><span class="empty">${subject.rationale}</span></span></div>`;
+    }
+    h += `</div>${expandBtn(sel)}${deepReadBtn(n)}</div>`;
     h += secOpen("ctr", "成员", T().file);
     subMods.forEach((c) => (h += nodeRow(c)));
     files.forEach((c) => (h += nodeRow(c)));
