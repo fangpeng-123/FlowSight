@@ -503,7 +503,7 @@ function renderPanel(sel) {
     const cls = kids.filter((c) => c.type === TYPES.CLASS);
     let h = crumbHtml + secOpen("dep", "文件概览", T().file);
     h += `<div class="card"><div class="t">${n.label}</div><div class="kv"><span class="k">路径</span><span class="v">${n.attrs && n.attrs.path || ""}</span></div>`;
-    h += `<div class="kv"><span class="k">成员</span><span class="v">类 ${cls.length} · 函数 ${fns.length}</span></div></div>${expandBtn(sel)}</div>`;
+    h += `<div class="kv"><span class="k">成员</span><span class="v">类 ${cls.length} · 函数 ${fns.length}</span></div></div>${expandBtn(sel)}${deepReadBtn(n)}</div>`;
     h += secOpen("ctr", "成员", T().function);
     cls.forEach((c) => (h += nodeRow(c)));
     fns.forEach((c) => (h += nodeRow(c)));
