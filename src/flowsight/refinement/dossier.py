@@ -84,7 +84,7 @@ def build_dossier(
     selected_nodes = [
         _annotate_context(node_by_id[node_id], candidates[node_id]) for node_id in selected_ids
     ]
-    allowance = _critical_path_allowance(
+    allowance, allowance_candidates = _critical_path_allowance(
         evidence_edges,
         node_by_id,
         internal_ids,
@@ -122,7 +122,12 @@ def build_dossier(
         for owner_id in subject_order
         if owner_id in selected_owners
     ]
-    overflow = _overflow(candidates, selected_set, evidence_edges, internal_ids)
+    overflow = _overflow(
+        {**candidates, **allowance_candidates},
+        selected_set | allowance_ids,
+        evidence_edges,
+        internal_ids,
+    )
     external_files = sorted({_node_path(node) for node in selected_nodes if _node_path(node)})
     allowance_files = sorted({_node_path(node) for node in allowance_nodes if _node_path(node)})
     allowance_edges = [
@@ -185,7 +190,7 @@ def _critical_path_allowance(
     selected_subject_id: str,
     limit: int,
     subject_limit: int,
-) -> dict[str, dict[str, Any]]:
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     """Expose a bounded evidenced second hop so the Agent can choose after claiming."""
 
     selected = set(selected_ids)
@@ -224,7 +229,7 @@ def _critical_path_allowance(
         owners.add(owner_id)
         if len(bounded) >= limit:
             break
-    return bounded
+    return bounded, allowance
 
 
 def _owner_index(catalog: ReadingSubjectCatalog) -> dict[str, ReadingSubject]:

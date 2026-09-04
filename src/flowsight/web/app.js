@@ -338,6 +338,9 @@ function deepReadBtn(node) {
   if (current && current.status === "ready" && current.artifact_available) {
     return `<button class="exp-btn deep-read-btn" onclick="openDeepRead(decodeURIComponent('${encodedId}'))">Open deep read</button>`;
   }
+  if (current && current.status === "failed" && current.fallback_artifact_available) {
+    return `<button class="exp-btn deep-read-btn" onclick="openDeepRead(decodeURIComponent('${encodedId}'))">Open previous deep read</button><button class="exp-btn deep-read-btn" onclick="requestDeepRead(decodeURIComponent('${encodedId}'))">Retry deep read</button>`;
+  }
   return `<button class="exp-btn deep-read-btn" onclick="requestDeepRead(decodeURIComponent('${encodedId}'))">${action.label}</button>`;
 }
 
@@ -345,7 +348,10 @@ async function loadCurrentRefinement(subjectId) {
   refinementLoads.add(subjectId);
   try {
     const response = await fetch(`/api/refinements/current?subject_id=${encodeURIComponent(subjectId)}`);
-    refinements.set(subjectId, response.ok ? await response.json() : { status: "missing" });
+    const status = response.ok ? await response.json() : { status: "missing" };
+    refinements.set(subjectId, status);
+    const presentation = refinementPresentation(status);
+    if (presentation && presentation.busy) pollRefinement(subjectId, status.job_id, 0);
   } catch (error) {
     refinements.set(subjectId, { status: "failed", display: error.message });
   } finally {
@@ -395,7 +401,10 @@ function currentCameraState() {
 
 function openDeepRead(subjectId) {
   const current = refinements.get(subjectId);
-  if (!current || current.status !== "ready" || !current.artifact_available) return;
+  const artifactUrl = current && current.status === "ready" && current.artifact_available
+    ? current.artifact_url
+    : current && current.fallback_artifact_available ? current.fallback_artifact_url : "";
+  if (!artifactUrl) return;
   const panel = document.getElementById("panel");
   deepReadSnapshot = captureExplorationState({
     camera: currentCameraState(), expanded, selectedId: state.selectedId,
@@ -408,7 +417,7 @@ function openDeepRead(subjectId) {
   document.querySelector(".hint").style.display = "none";
   const view = document.getElementById("deep-read-view");
   document.getElementById("deep-read-crumb").textContent = `Module deep read · ${subjectId}`;
-  document.getElementById("deep-read-frame").src = current.artifact_url;
+  document.getElementById("deep-read-frame").src = artifactUrl;
   view.hidden = false;
 }
 window.openDeepRead = openDeepRead;
@@ -455,8 +464,15 @@ async function pollRefinement(subjectId, jobId, attempt) {
       loadCurrentRefinement(subjectId);
     }
   } catch (error) {
-    refinements.set(subjectId, { status: "failed", display: error.message });
-    if (state.selectedId) renderPanel(state.selectedId);
+    const current = refinements.get(subjectId);
+    const presentation = refinementPresentation(current);
+    if (presentation && presentation.busy) {
+      const delay = Math.min(1000 + attempt * 100, 5000);
+      setTimeout(() => pollRefinement(subjectId, jobId, attempt + 1), delay);
+    } else {
+      refinements.set(subjectId, { status: "failed", display: error.message });
+      if (state.selectedId) renderPanel(state.selectedId);
+    }
   }
 }
 

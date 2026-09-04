@@ -144,8 +144,18 @@ class JobStore:
         if active:
             return max(active, key=lambda status: (status.get("created_at", ""), status["job_id"]))
         ready = [status for status in matches if status.get("status") == "ready"]
-        pool = ready or matches
-        return max(pool, key=lambda status: (status.get("created_at", ""), status["job_id"]))
+        latest = max(matches, key=lambda status: (status.get("created_at", ""), status["job_id"]))
+        if latest.get("status") == "failed" and ready:
+            fallback = max(
+                ready, key=lambda status: (status.get("created_at", ""), status["job_id"])
+            )
+            latest = dict(latest)
+            latest.update(
+                fallback_artifact_available=True,
+                fallback_artifact_url=fallback.get("artifact_url"),
+                fallback_job_id=fallback.get("job_id"),
+            )
+        return latest
 
     def cancel(self, job_id: str) -> dict[str, Any]:
         with self._lock:

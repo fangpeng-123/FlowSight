@@ -251,7 +251,11 @@ def test_failed_regeneration_falls_back_to_previous_ready_artifact(tmp_path):
     state.refinements.claim(second["job_id"], agent_id="fixture-agent")
     state.refinements.fail(second["job_id"], "generation failed")
 
-    assert state.refinements.latest_status("pkg/api")["job_id"] == first["job_id"]
+    latest = state.refinements.latest_status("pkg/api")
+    assert latest["job_id"] == second["job_id"]
+    assert latest["status"] == "failed"
+    assert latest["fallback_job_id"] == first["job_id"]
+    assert latest["fallback_artifact_available"] is True
 
 
 def test_new_result_atomically_replaces_subject_artifact_without_history(tmp_path):
