@@ -31,8 +31,8 @@
   },
   "components": [
     {"id": "cmdTrace", "type": "external", "label": "_cmd_trace", "sublabel": "_cmd_trace(args) -> int · cli.py:107 · parser", "tag": "FlowSight Core · src/flowsight", "pos": [40, 50], "size": [190, 70]},
-    {"id": "docToDict", "type": "external", "label": "doc_to_dict", "sublabel": "(doc) -> dict · schema.py:239 · parser", "tag": "FlowSight Core · src/flowsight", "pos": [275, 550], "size": [190, 70]},
-    {"id": "serverBuild", "type": "external", "label": "_build", "sublabel": "(self) -> None · server/app.py:49 · parser", "tag": "Local Server · src/flowsight/server", "pos": [720, 50], "size": [190, 70]},
+    {"id": "docToDict", "type": "external", "label": "doc_to_dict", "sublabel": "(doc: GraphDocument) -> dict[str, Any] · schema.py:239 · parser", "tag": "FlowSight Core · src/flowsight", "pos": [245, 550], "size": [250, 70]},
+    {"id": "serverBuild", "type": "external", "label": "_build", "sublabel": "() -> None · server/app.py:50 · parser", "tag": "Local Server · src/flowsight/server", "pos": [720, 50], "size": [190, 70]},
     {"id": "runTrace", "type": "backend", "label": "run_trace", "sublabel": "trace.py:35 · parser · 执行采集", "pos": [40, 170], "size": [190, 70]},
     {"id": "ingestTrace", "type": "backend", "label": "ingest_trace", "sublabel": "trace.py:86 · parser · 导入既有轨迹", "pos": [40, 310], "size": [190, 70]},
     {"id": "loadTrace", "type": "backend", "label": "load_trace", "sublabel": "trace.py:77 · parser · JSON 边界", "pos": [275, 310], "size": [190, 70]},
@@ -56,7 +56,7 @@
     {"id": "correlate-pairs", "from": "correlate", "to": "eventPairs", "label": "calls", "variant": "default"},
     {"id": "correlate-divergence", "from": "correlate", "to": "divergence", "label": "classify", "variant": "default", "labelDy": 26},
     {"id": "overlay-apply", "from": "overlayGraph", "to": "applyOverlay", "label": "mutate graph", "variant": "emphasis"},
-    {"id": "overlay-serialize", "from": "overlayGraph", "to": "docToDict", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "straight"},
+    {"id": "overlay-serialize", "from": "overlayGraph", "to": "docToDict", "variant": "dashed"},
     {"id": "server-apply", "from": "serverBuild", "to": "applyOverlay", "variant": "dashed", "fromSide": "right", "toSide": "right", "via": [[955, 85], [955, 485]]}
   ],
   "cards": [

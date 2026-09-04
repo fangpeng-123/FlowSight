@@ -321,7 +321,7 @@ def _validate_authorship(request: dict[str, Any], authored: AuthoredArchitecture
     if not runtime_present:
         for card in specification.get("cards", []):
             text = json.dumps(card, ensure_ascii=False).lower()
-            if any(marker in text for marker in ("runtime", "observed", "运行", "观测")) and not any(
+            if any(marker in text for marker in ("observed", "观测", "实际运行")) and not any(
                 marker in text
                 for marker in ("no runtime", "without runtime", "not observed", "未", "无", "省略")
             ):
