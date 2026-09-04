@@ -38,6 +38,7 @@ The map is done when these are all decided - enough to start building an MVP:
   - **08 (medium) → local web app (browser).** Ship one host first; graph layer stays host-agnostic for a future webview.
   - **06 (runtime overlay) → viztracer actual-on-expected.** `flowsight trace <cmd>` or `--from <file.json>`; trace events mapped onto skeleton `Function` nodes by file:line / `f_code`; async via viztracer, generators deduped by `f_code`, C-ext out of MVP scope.
   - **03 (renderer) → 3d-force-graph (supersedes Cytoscape for the MVP).** User preference + verified prototype. 03's framework-agnostic-graph-layer advice retained as a renderer-agnostic data adapter. Pin 3d-force-graph v1.80; no `onNodeDblClick` (detect in `onNodeClick`); overlays outside the graph container; triple-set theme bg.
+- **[FlowSight × Archify Module Deep-Read Spec](../../docs/spec/archify-module-deep-read-spec.md)** - Agent-mediated, on-demand transition from a selected 3D reading subject to a validated Archify Architecture deep read, with durable jobs, bounded cross-module context, truthful provenance, stale detection, and atomic overwrite. Status: `ready-for-agent`.
 
 ## Build tickets (ready-for-agent)
 
