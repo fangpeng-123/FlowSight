@@ -9,13 +9,14 @@
 import {
   buildIndexes, buildRenderModel, neighbors, nodeColor, linkColor, linkWidth,
   nodeVal, arrowLen, particles, nodeBaseColor, hasRisk, THEMES, TYPES, EDGES,
-  search, topLevelModules, riskRank, domainPipeline, deepReadAction,
+  search, topLevelModules, riskRank, domainPipeline, deepReadAction, refinementPresentation,
 } from "./adapter.js";
 
 let graph = null;
 let state = { selectedId: null, neigh: new Set(), dim: "dep" };
 let expanded = new Set();
 let theme = "dark";
+const refinements = new Map();
 const T = () => THEMES[theme];
 
 let Graph = null;
@@ -318,17 +319,51 @@ function enrichAllBtn() {
 function deepReadBtn(node) {
   const action = deepReadAction(node);
   if (!action) return "";
+  const current = refinements.get(action.subjectId);
+  const presentation = refinementPresentation(current);
   const encodedId = encodeURIComponent(action.subjectId).replace(/'/g, "%27");
+  if (presentation && presentation.busy) {
+    return `<button class="exp-btn deep-read-btn" disabled>${presentation.label}</button>`;
+  }
   return `<button class="exp-btn deep-read-btn" onclick="requestDeepRead(decodeURIComponent('${encodedId}'))">${action.label}</button>`;
 }
 
-function requestDeepRead(subjectId) {
-  // A deliberate intent seam for issue #4.  Selection alone never emits this.
-  window.dispatchEvent(new CustomEvent("flowsight:deep-read-requested", {
-    detail: { subjectId },
-  }));
+async function requestDeepRead(subjectId) {
+  try {
+    const response = await fetch("/api/refinements", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subject_id: subjectId }),
+    });
+    const status = await response.json();
+    if (!response.ok) throw new Error(status.error || `HTTP ${response.status}`);
+    refinements.set(subjectId, status);
+    renderPanel(state.selectedId);
+    pollRefinement(subjectId, status.job_id, 0);
+  } catch (error) {
+    refinements.set(subjectId, { status: "failed", display: error.message });
+    renderPanel(state.selectedId);
+  }
 }
 window.requestDeepRead = requestDeepRead;
+
+async function pollRefinement(subjectId, jobId, attempt) {
+  if (attempt >= 120) return;
+  try {
+    const response = await fetch(`/api/refinements/${encodeURIComponent(jobId)}`);
+    const status = await response.json();
+    if (!response.ok) throw new Error(status.error || `HTTP ${response.status}`);
+    refinements.set(subjectId, status);
+    if (state.selectedId) renderPanel(state.selectedId);
+    const presentation = refinementPresentation(status);
+    if (presentation && presentation.busy) {
+      setTimeout(() => pollRefinement(subjectId, jobId, attempt + 1), 1000);
+    }
+  } catch (error) {
+    refinements.set(subjectId, { status: "failed", display: error.message });
+    if (state.selectedId) renderPanel(state.selectedId);
+  }
+}
 
 // ---- runtime overlay card (ticket 05) ----
 // Per-function runtime stats captured by a viztracer trace: call_count, timings,

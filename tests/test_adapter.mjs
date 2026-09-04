@@ -7,7 +7,7 @@ import {
   buildIndexes, buildRenderModel, isVisible, neighbors, nodeColor, linkColor,
   linkWidth, nodeVal, arrowLen, particles, nodeBaseColor, hasRisk, hasRuntime,
   linkRuntime, isUnexpectedFlow, DIM, THEMES, EDGES, TYPES, search, riskRank,
-  domainPipeline, dsSubgraph, riskSubgraph, deepReadAction,
+  domainPipeline, dsSubgraph, riskSubgraph, deepReadAction, refinementPresentation,
 } from "../src/flowsight/web/adapter.js";
 
 // A mini graph mirroring the fixture's shape: module > file > class > function.
@@ -189,6 +189,13 @@ test("a non-package reading subject can use its parser file as the action anchor
   };
 
   assert.equal(deepReadAction(file).subjectId, "pkg/handlers");
+});
+
+test("pending refinement is presented truthfully as Waiting for Agent", () => {
+  assert.deepEqual(refinementPresentation({ status: "pending", stage: "waiting_for_agent" }), {
+    label: "Waiting for Agent",
+    busy: true,
+  });
 });
 
 // ---- ticket 04: domain entities, four views, ranking, pipeline, search ----

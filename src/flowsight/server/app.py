@@ -19,6 +19,8 @@ from flowsight.enrich.attacher import enrich_eager, enrich_function
 from flowsight.enrich.cache import EnrichCache
 from flowsight.enrich.llm import from_env
 from flowsight.reading_subjects import ReadingSubjectCatalog, apply_catalog, load_catalog
+from flowsight.refinement.dossier import build_dossier
+from flowsight.refinement.jobs import JobStore
 from flowsight.skeleton.extractor import extract
 
 WEB_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "web"))
@@ -38,6 +40,7 @@ class GraphState:
         self.cache = EnrichCache(os.path.join(project_path, ".flowsight", "enrich-cache.json"))
         self.llm = from_env()
         self.catalog = ReadingSubjectCatalog()
+        self.refinements = JobStore(project_path)
         self.doc: S.GraphDocument = None  # set by _build
         self.divergence: dict = {}
         self._payload: dict = {}
@@ -70,8 +73,13 @@ class GraphState:
     def payload(self) -> dict:
         return self._payload
 
+    def request_refinement(self, subject_id: str, *, event_stream=None) -> dict:
+        dossier = build_dossier(self.doc, self.catalog, subject_id, self.project_path)
+        status, _created = self.refinements.create_request(dossier, event_stream=event_stream)
+        return status
 
-def make_handler(state: GraphState):
+
+def make_handler(state: GraphState, *, event_stream=None):
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=WEB_DIR, **kwargs)
@@ -110,12 +118,50 @@ def make_handler(state: GraphState):
                 from flowsight.server.enrich_api import handle_enrich
                 handle_enrich(self, state)
                 return
+            if self.path.startswith("/api/refinements/"):
+                job_id = self.path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+                try:
+                    self._json(state.refinements.get_status(job_id))
+                except KeyError as exc:
+                    self._json({"ok": False, "error": str(exc)}, 404)
+                return
             # static: strip query string
             path = self.path.split("?", 1)[0].lstrip("/")
             if path == "" or path == "index.html":
                 self._serve_file("index.html", "text/html; charset=utf-8")
                 return
             return super().do_GET()
+
+        def do_POST(self):
+            if self.path.split("?", 1)[0].rstrip("/") != "/api/refinements":
+                self._json({"ok": False, "error": "Not found"}, 404)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length <= 0 or length > 65536:
+                    raise ValueError("invalid request body length")
+                body = json.loads(self.rfile.read(length))
+                subject_id = body.get("subject_id") if isinstance(body, dict) else None
+                if not isinstance(subject_id, str) or not subject_id:
+                    raise ValueError("subject_id is required")
+                status = state.request_refinement(subject_id, event_stream=event_stream)
+                self._json(status, 202)
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._json({"ok": False, "error": str(exc)}, 400)
+            except KeyError as exc:
+                self._json({"ok": False, "error": str(exc)}, 404)
+
+        def do_DELETE(self):
+            if not self.path.startswith("/api/refinements/"):
+                self._json({"ok": False, "error": "Not found"}, 404)
+                return
+            job_id = self.path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+            try:
+                self._json(state.refinements.cancel(job_id))
+            except KeyError as exc:
+                self._json({"ok": False, "error": str(exc)}, 404)
+            except ValueError as exc:
+                self._json({"ok": False, "error": str(exc)}, 409)
 
         def _serve_file(self, name: str, ctype: str):
             full = os.path.join(WEB_DIR, name)

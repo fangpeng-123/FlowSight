@@ -104,6 +104,19 @@ export function deepReadAction(node) {
   return { subjectId: subject.id, label: "Deep read this module" };
 }
 
+export function refinementPresentation(status) {
+  if (!status) return null;
+  const labels = {
+    pending: "Waiting for Agent", claimed: "Claimed", generating: "Generating",
+    validating: "Validating", ready: "Ready", failed: "Failed",
+    cancelled: "Cancelled", stale: "Stale",
+  };
+  return {
+    label: labels[status.status] || status.display || status.status,
+    busy: ["pending", "claimed", "generating", "validating"].includes(status.status),
+  };
+}
+
 // ---- the four views = data subsets over one schema (decision 05) ----
 // dep: structural skeleton (calls/imports/contains/references + runtime data_flow overlay);
 //      domain_entity nodes are advisory and belong to the ds view, so dim them here.

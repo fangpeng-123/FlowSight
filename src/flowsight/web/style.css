@@ -99,6 +99,7 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
   color:var(--txt-dim);cursor:pointer;font-size:12px;}
 .exp-btn:hover{color:var(--txt);border-color:#3b82f6;}
 .deep-read-btn{color:#2dd4bf;border-color:#2dd4bf;font-weight:600;}
+.deep-read-btn:disabled{cursor:wait;opacity:.75;}
 .params{font-family:"SFMono-Regular",Consolas,Menlo,monospace;font-size:11px;color:var(--txt);background:var(--bg);
   border:1px solid var(--line);border-radius:6px;padding:6px 9px;margin-top:5px;}
 [data-theme="light"] .params{background:#fff;}
