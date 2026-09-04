@@ -1,4 +1,7 @@
 {
+  "cmdTrace": "func:src/flowsight/cli.py::_cmd_trace@107",
+  "docToDict": "func:src/flowsight/schema.py::doc_to_dict@239",
+  "serverBuild": "func:src/flowsight/server/app.py::GraphState._build@49",
   "runTrace": "func:src/flowsight/overlay/trace.py::run_trace@35",
   "ingestTrace": "func:src/flowsight/overlay/trace.py::ingest_trace@86",
   "loadTrace": "func:src/flowsight/overlay/trace.py::load_trace@77",

@@ -67,9 +67,10 @@ def test_dossier_contains_owned_facts_and_boundary_relationships(tmp_path):
     dossier = build_dossier(state.doc, state.catalog, "pkg/api", project)
 
     assert dossier["subject"]["id"] == "pkg/api"
-    assert dossier["source_scope"] == {
-        "owned_files": ["pkg/api/__init__.py", "pkg/api/routes.py"]
-    }
+    assert dossier["source_scope"]["owned_files"] == [
+        "pkg/api/__init__.py", "pkg/api/routes.py"
+    ]
+    assert dossier["source_scope"]["external_files"] == ["pkg/core/service.py"]
     internal = dossier["nodes"]["internal"]
     assert any(node["label"] == "route" and node["signature"]["returns"] == "str" for node in internal)
     assert all(node["origin"] == "parser" for node in internal)

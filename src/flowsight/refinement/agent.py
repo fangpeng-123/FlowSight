@@ -248,13 +248,18 @@ def _validate_authorship(request: dict[str, Any], authored: AuthoredArchitecture
         node_id = authored.reverse_id_map.get(component_id)
         if node_id not in evidence_nodes:
             raise ValueError(f"component {component_id!r} has no parser/runtime evidence reverse mapping")
+        if evidence_nodes[node_id].get("origin") not in {"parser", "runtime"}:
+            raise ValueError(f"component {component_id!r} is not parser/runtime topology evidence")
 
-    evidence_edges = {
-        (edge["source"], edge["target"])
-        for group in ("internal", "boundary")
-        for edge in dossier["relationships"].get(group, [])
-        if edge.get("origin") in {"parser", "runtime"}
-    }
+    _validate_context_presentation(specification, authored.reverse_id_map, dossier)
+
+    evidence_edges: dict[tuple[str, str], set[str]] = {}
+    for group in ("internal", "boundary", "external_context"):
+        for edge in dossier["relationships"].get(group, []):
+            if edge.get("origin") in {"parser", "runtime"}:
+                evidence_edges.setdefault((edge["source"], edge["target"]), set()).add(
+                    edge["origin"]
+                )
     for connection in specification.get("connections", []):
         source = authored.reverse_id_map.get(connection.get("from"))
         target = authored.reverse_id_map.get(connection.get("to"))
@@ -263,10 +268,16 @@ def _validate_authorship(request: dict[str, Any], authored: AuthoredArchitecture
                 f"connection {connection.get('from')!r} -> {connection.get('to')!r} "
                 "has no parser/runtime topology evidence"
             )
+        if "runtime" in evidence_edges[(source, target)]:
+            presentation = f"{connection.get('label', '')} {connection.get('variant', '')}".lower()
+            if connection.get("variant") != "emphasis" or not any(
+                marker in presentation for marker in ("runtime", "observed", "运行", "观测")
+            ):
+                raise ValueError("runtime connection must be visibly marked as observed and emphasized")
 
     runtime_present = any(node.get("runtime") for node in evidence_nodes.values()) or any(
         edge.get("origin") == "runtime"
-        for group in ("internal", "boundary")
+        for group in ("internal", "boundary", "external_context")
         for edge in dossier["relationships"].get(group, [])
     )
     for view in meta.get("views", []):
@@ -274,6 +285,94 @@ def _validate_authorship(request: dict[str, Any], authored: AuthoredArchitecture
         if "runtime" in text or "运行" in text:
             if not runtime_present:
                 raise ValueError("runtime guided view requires observed runtime evidence")
+
+
+def _validate_context_presentation(
+    specification: dict[str, Any],
+    reverse_id_map: dict[str, str],
+    dossier: dict[str, Any],
+) -> None:
+    internal_ids = {node["id"] for node in dossier["nodes"].get("internal", [])}
+    context_by_id = {node["id"]: node for node in dossier["nodes"].get("boundary", [])}
+    components = {component["id"]: component for component in specification.get("components", [])}
+    boundaries = specification.get("boundaries", [])
+
+    for component_id, component in components.items():
+        node_id = reverse_id_map[component_id]
+        node = context_by_id.get(node_id)
+        if node is None:
+            continue
+        context = node.get("context") or {}
+        owner = context.get("owner") or {}
+        presentation = " ".join(
+            str(component.get(field, "")) for field in ("label", "sublabel", "tag")
+        )
+        if component.get("type") != "external":
+            raise ValueError(f"external context component {component_id!r} needs a distinct external type")
+        owner_tag = str(component.get("tag", ""))
+        if not owner or not any(
+            str(owner.get(field, "")) and str(owner[field]) in owner_tag
+            for field in ("id", "label")
+        ):
+            raise ValueError(f"external context component {component_id!r} must display its owner")
+        location = node.get("location") or {}
+        source_paths = {
+            source.get("path") for source in component.get("sources", []) if isinstance(source, dict)
+        }
+        location_file = str(location.get("file", ""))
+        compact_location = (
+            bool(location_file)
+            and Path(location_file).name in presentation
+            and f":{location.get('line')}" in presentation
+        )
+        if location_file not in presentation and location_file not in source_paths and not compact_location:
+            raise ValueError(f"external context component {component_id!r} must display its source location")
+        signature = node.get("signature")
+        if signature and component.get("label") != node.get("label"):
+            raise ValueError(f"external context component {component_id!r} must retain its exact identifier")
+        matching_boundaries = [
+            boundary for boundary in boundaries if component_id in boundary.get("wraps", [])
+        ]
+        if not any(
+            ("external" in str(boundary.get("label", "")).lower() or "外部" in str(boundary.get("label", "")))
+            and any(
+                str(owner.get(field, "")) in str(boundary.get("label", ""))
+                for field in ("id", "label")
+                if owner.get(field)
+            )
+            for boundary in matching_boundaries
+        ):
+            raise ValueError(
+                f"external context component {component_id!r} must be inside an owner-labelled external boundary"
+            )
+
+    internal_components = {
+        component_id for component_id in components
+        if reverse_id_map[component_id] in internal_ids
+    }
+    external_components = {
+        component_id for component_id in components
+        if reverse_id_map[component_id] in context_by_id
+    }
+    for boundary in boundaries:
+        wraps = set(boundary.get("wraps", []))
+        if wraps & internal_components and wraps & external_components:
+            raise ValueError("internal and external context components require distinct boundaries")
+
+    overflow = (dossier.get("context") or {}).get("overflow", [])
+    if overflow:
+        narrative = json.dumps(specification.get("cards", []), ensure_ascii=False).lower()
+        if not any(marker in narrative for marker in ("overflow", "omitted", "aggregate", "省略", "聚合", "未展示")):
+            raise ValueError("external context overflow must be acknowledged as an aggregate")
+        for aggregate in overflow:
+            owner = aggregate.get("owner") or {}
+            owner_visible = any(
+                str(owner.get(field, "")) and str(owner[field]).lower() in narrative
+                for field in ("id", "label")
+            )
+            count_visible = str(aggregate.get("node_count", "")) in narrative
+            if not owner_visible or not count_visible:
+                raise ValueError("external context overflow must display each owner and omitted count")
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:

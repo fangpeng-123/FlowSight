@@ -3,7 +3,7 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "FlowSight Runtime Overlay 模块深读",
-    "subtitle": "从 trace 采集到 GraphDocument 运行时覆盖；拓扑均来自 parser 证据",
+    "subtitle": "从 trace 采集到 GraphDocument 运行时覆盖；内部与跨模块拓扑均来自 parser 证据",
     "locale": "zh-CN",
     "quality_profile": "showcase",
     "visual_preset": "blueprint",
@@ -18,41 +18,51 @@
       {
         "id": "entrypoints",
         "label": "入口与采集",
-        "focus": ["runTrace", "ingestTrace", "loadTrace", "overlayGraph"],
-        "note": "命令执行或既有文件进入同一 trace 读取边界。"
+        "focus": ["cmdTrace", "runTrace", "ingestTrace", "loadTrace", "overlayGraph"],
+        "note": "CLI 命令把执行采集或既有文件导入同一 trace 读取边界。"
       },
       {
         "id": "correlation",
         "label": "关联主路径",
-        "focus": ["overlayGraph", "correlate", "eventPairs", "divergence", "applyOverlay"],
+        "focus": ["serverBuild", "overlayGraph", "correlate", "eventPairs", "divergence", "applyOverlay", "docToDict"],
         "note": "把事件匹配到 parser 节点，再计算偏差并写回图文档。"
       }
     ]
   },
   "components": [
-    {"id": "runTrace", "type": "backend", "label": "run_trace", "sublabel": "trace.py:35 · parser · 执行采集", "pos": [40, 110], "size": [190, 76]},
-    {"id": "ingestTrace", "type": "backend", "label": "ingest_trace", "sublabel": "trace.py:86 · parser · 导入既有轨迹", "pos": [40, 260], "size": [190, 76]},
-    {"id": "loadTrace", "type": "backend", "label": "load_trace", "sublabel": "trace.py:77 · parser · JSON 边界", "pos": [275, 260], "size": [190, 76]},
-    {"id": "overlayGraph", "type": "backend", "label": "overlay_graph_dict", "sublabel": "trace.py:97 · parser · 编排入口", "pos": [275, 410], "size": [190, 76]},
-    {"id": "correlate", "type": "backend", "label": "correlate", "sublabel": "correlator.py:112 · parser · 关联核心", "pos": [510, 250], "size": [190, 76]},
-    {"id": "eventPairs", "type": "backend", "label": "_event_pairs", "sublabel": "correlator.py:297 · parser · 调用配对", "pos": [745, 110], "size": [190, 76]},
-    {"id": "divergence", "type": "backend", "label": "_divergence", "sublabel": "correlator.py:403 · parser · 偏差分类", "pos": [745, 250], "size": [190, 76]},
-    {"id": "applyOverlay", "type": "backend", "label": "apply_overlay", "sublabel": "correlator.py:170 · parser · 写回 GraphDocument", "pos": [745, 410], "size": [190, 76]}
+    {"id": "cmdTrace", "type": "external", "label": "_cmd_trace", "sublabel": "_cmd_trace(args) -> int · cli.py:107 · parser", "tag": "FlowSight Core · src/flowsight", "pos": [40, 50], "size": [190, 70]},
+    {"id": "docToDict", "type": "external", "label": "doc_to_dict", "sublabel": "(doc) -> dict · schema.py:239 · parser", "tag": "FlowSight Core · src/flowsight", "pos": [275, 550], "size": [190, 70]},
+    {"id": "serverBuild", "type": "external", "label": "_build", "sublabel": "(self) -> None · server/app.py:49 · parser", "tag": "Local Server · src/flowsight/server", "pos": [720, 50], "size": [190, 70]},
+    {"id": "runTrace", "type": "backend", "label": "run_trace", "sublabel": "trace.py:35 · parser · 执行采集", "pos": [40, 170], "size": [190, 70]},
+    {"id": "ingestTrace", "type": "backend", "label": "ingest_trace", "sublabel": "trace.py:86 · parser · 导入既有轨迹", "pos": [40, 310], "size": [190, 70]},
+    {"id": "loadTrace", "type": "backend", "label": "load_trace", "sublabel": "trace.py:77 · parser · JSON 边界", "pos": [275, 310], "size": [190, 70]},
+    {"id": "overlayGraph", "type": "backend", "label": "overlay_graph_dict", "sublabel": "trace.py:97 · parser · 编排入口", "pos": [275, 450], "size": [190, 70]},
+    {"id": "correlate", "type": "backend", "label": "correlate", "sublabel": "correlator.py:112 · parser · 关联核心", "pos": [510, 310], "size": [190, 70]},
+    {"id": "eventPairs", "type": "backend", "label": "_event_pairs", "sublabel": "correlator.py:297 · parser · 调用配对", "pos": [745, 170], "size": [190, 70]},
+    {"id": "divergence", "type": "backend", "label": "_divergence", "sublabel": "correlator.py:403 · parser · 偏差分类", "pos": [745, 310], "size": [190, 70]},
+    {"id": "applyOverlay", "type": "backend", "label": "apply_overlay", "sublabel": "correlator.py:170 · parser · 写回 GraphDocument", "pos": [745, 450], "size": [190, 70]}
   ],
   "boundaries": [
-    {"kind": "region", "label": "内部 · Runtime Overlay reading subject", "wraps": ["runTrace", "ingestTrace", "loadTrace", "overlayGraph", "correlate", "eventPairs", "divergence", "applyOverlay"], "pad": 28}
+    {"kind": "region", "label": "内部 · Runtime Overlay reading subject", "wraps": ["runTrace", "ingestTrace", "loadTrace", "overlayGraph", "correlate", "eventPairs", "divergence", "applyOverlay"], "pad": 18},
+    {"kind": "region", "label": "外部上下文 · FlowSight Core · src/flowsight", "wraps": ["cmdTrace"], "pad": 8},
+    {"kind": "region", "label": "外部上下文 · FlowSight Core · src/flowsight", "wraps": ["docToDict"], "pad": 8},
+    {"kind": "region", "label": "外部上下文 · Local Server · src/flowsight/server", "wraps": ["serverBuild"], "pad": 8}
   ],
   "connections": [
+    {"id": "cli-run", "from": "cmdTrace", "to": "runTrace", "variant": "dashed"},
+    {"id": "cli-ingest", "from": "cmdTrace", "to": "ingestTrace", "variant": "dashed", "fromSide": "left", "toSide": "left", "via": [[20, 85], [20, 345]]},
     {"id": "ingest-load", "from": "ingestTrace", "to": "loadTrace", "label": "calls", "variant": "default"},
     {"id": "overlay-correlate", "from": "overlayGraph", "to": "correlate", "label": "trace events", "variant": "emphasis"},
     {"id": "correlate-pairs", "from": "correlate", "to": "eventPairs", "label": "calls", "variant": "default"},
     {"id": "correlate-divergence", "from": "correlate", "to": "divergence", "label": "classify", "variant": "default", "labelDy": 26},
-    {"id": "overlay-apply", "from": "overlayGraph", "to": "applyOverlay", "label": "mutate graph", "variant": "emphasis"}
+    {"id": "overlay-apply", "from": "overlayGraph", "to": "applyOverlay", "label": "mutate graph", "variant": "emphasis"},
+    {"id": "overlay-serialize", "from": "overlayGraph", "to": "docToDict", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "straight"},
+    {"id": "server-apply", "from": "serverBuild", "to": "applyOverlay", "variant": "dashed", "fromSide": "right", "toSide": "right", "via": [[955, 85], [955, 485]]}
   ],
   "cards": [
     {"dot": "cyan", "title": "职责（LLM 建议）", "items": ["把 VizTracer 事件关联到 parser 图节点", "将实际调用与预期调用的差异写回 GraphDocument"]},
     {"dot": "emerald", "title": "输入与输出（parser 证据）", "items": ["输入：Chrome trace JSON 与 parser skeleton", "输出：带 runtime attrs、data_flow 边和 divergence 的图文档"]},
     {"dot": "amber", "title": "风险（LLM 建议）", "items": ["路径与函数名匹配存在歧义时会产生 unmatched 事件", "参数和返回值日志默认关闭，避免敏感数据泄露"]},
-    {"dot": "slate", "title": "运行证据", "items": ["本次 dossier 未包含命中该模块的 runtime 观测，因此按契约省略运行视图", "其余未展示 helper 以聚合说明代替，共保留 8 个主节点"]}
+    {"dot": "slate", "title": "运行证据与有界上下文", "items": ["本次 dossier 未包含命中该模块的 runtime 观测，因此按契约省略运行视图", "外部主节点 3 个，来自 FlowSight Core 与 Local Server；内部其余 helper 聚合省略", "预算外 src/flowsight/skeleton（Skeleton）聚合省略 1 个节点"]}
   ]
 }

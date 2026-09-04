@@ -87,6 +87,82 @@ def _architecture() -> AuthoredArchitecture:
     )
 
 
+def _dossier_with_external_context(project: Path) -> dict:
+    dossier = _dossier(project)
+    external_path = project / "pkg" / "core.py"
+    external_path.write_text("def execute(value: str) -> str:\n    return value\n", encoding="utf-8")
+    external = {
+        "id": "function:pkg.core.execute",
+        "type": "function",
+        "label": "execute",
+        "origin": "parser",
+        "location": {"file": "pkg/core.py", "line": 1, "end_line": 2, "col": 0},
+        "signature": {
+            "params": [{"name": "value", "type": "str", "default": ""}],
+            "returns": "str",
+            "decorators": [],
+            "is_async": False,
+        },
+        "purpose": "",
+        "contract": None,
+        "data_flow_role": "",
+        "risk": None,
+        "fields": [],
+        "runtime": {},
+        "code_hash": "",
+        "attrs": {},
+        "context": {
+            "owner": {"id": "pkg/core", "label": "Core"},
+            "hop": 1,
+            "directions": ["outgoing"],
+            "evidence_origins": ["parser"],
+            "justification": "",
+        },
+    }
+    edge = {
+        "source": "function:pkg.api.route",
+        "target": external["id"],
+        "type": "calls",
+        "origin": "parser",
+        "location": {"file": "pkg/api.py", "line": 2, "end_line": 0, "col": 0},
+        "attrs": {},
+    }
+    dossier["nodes"]["boundary"] = [external]
+    dossier["relationships"]["boundary"] = [edge]
+    dossier["relationships"]["external_context"] = [edge]
+    dossier["source_scope"]["external_files"] = ["pkg/core.py"]
+    dossier["context"] = {
+        "policy": {"max_external_subjects": 2, "max_external_nodes": 6},
+        "external_subjects": [{"id": "pkg/core", "label": "Core"}],
+        "selected_primary_node_count": 1,
+        "omitted_primary_node_count": 0,
+        "overflow": [],
+    }
+    return dossier
+
+
+def _architecture_with_external_context() -> AuthoredArchitecture:
+    authored = _architecture()
+    authored.specification["components"].append({
+        "id": "execute",
+        "type": "external",
+        "label": "execute",
+        "sublabel": "execute(value: str) -> str · pkg/core.py:1 · parser",
+        "tag": "Core · pkg/core",
+        "pos": [340, 120],
+        "size": [220, 72],
+    })
+    authored.specification["boundaries"] = [
+        {"kind": "region", "label": "内部 · Public API", "wraps": ["route"]},
+        {"kind": "region", "label": "外部上下文 · Core · pkg/core", "wraps": ["execute"]},
+    ]
+    authored.specification["connections"] = [
+        {"from": "route", "to": "execute", "label": "calls"}
+    ]
+    authored.reverse_id_map["execute"] = "function:pkg.core.execute"
+    return authored
+
+
 class FixtureAuthor:
     def __init__(self, store: JobStore):
         self.store = store
@@ -237,6 +313,118 @@ def test_agent_rejects_delivery_receipt_that_does_not_bind_exact_bytes(tmp_path)
     assert failed is not None
     assert failed["status"] == "failed"
     assert "specification SHA-256 mismatch" in failed["diagnostic"]
+
+
+def test_agent_accepts_external_context_with_owner_location_and_distinct_boundary(tmp_path):
+    project = tmp_path / "project"
+    store = JobStore(project)
+    dossier = _dossier_with_external_context(project)
+    store.create_request(dossier, event_stream=io.StringIO())
+
+    class ContextAuthor:
+        def author(self, request, diagnostic=""):
+            return _architecture_with_external_context()
+
+    ready = RefinementAgent(
+        store, ContextAuthor(), FixtureArchify(store), agent_id="fixture-agent"
+    ).process_next()
+
+    assert ready is not None
+    assert ready["status"] == "ready"
+
+
+@pytest.mark.parametrize("mutation", ["owner", "location", "visual_type", "boundary"])
+def test_agent_rejects_context_that_hides_ownership_or_module_boundary(tmp_path, mutation):
+    project = tmp_path / "project"
+    store = JobStore(project)
+    store.create_request(_dossier_with_external_context(project), event_stream=io.StringIO())
+    authored = _architecture_with_external_context()
+    external = authored.specification["components"][1]
+    if mutation == "owner":
+        external.pop("tag")
+    elif mutation == "location":
+        external["sublabel"] = "execute(value: str) -> str · parser"
+    elif mutation == "visual_type":
+        external["type"] = "backend"
+    else:
+        authored.specification["boundaries"] = authored.specification["boundaries"][:1]
+
+    class HiddenContextAuthor:
+        def author(self, request, diagnostic=""):
+            return authored
+
+    archify = FixtureArchify(store)
+    failed = RefinementAgent(
+        store,
+        HiddenContextAuthor(),
+        archify,
+        agent_id="fixture-agent",
+        max_repair_rounds=0,
+    ).process_next()
+
+    assert failed is not None
+    assert failed["status"] == "failed"
+    assert archify.calls == 0
+    assert "external context" in failed["diagnostic"]
+
+
+def test_runtime_context_must_be_visibly_observed_and_emphasized(tmp_path):
+    project = tmp_path / "project"
+    store = JobStore(project)
+    dossier = _dossier_with_external_context(project)
+    for group in ("boundary", "external_context"):
+        dossier["relationships"][group][0]["origin"] = "runtime"
+    dossier["nodes"]["boundary"][0]["context"]["evidence_origins"] = ["runtime"]
+    store.create_request(dossier, event_stream=io.StringIO())
+    authored = _architecture_with_external_context()
+
+    class RuntimeAuthor:
+        def author(self, request, diagnostic=""):
+            return authored
+
+    archify = FixtureArchify(store)
+    failed = RefinementAgent(
+        store, RuntimeAuthor(), archify, agent_id="fixture-agent", max_repair_rounds=0
+    ).process_next()
+
+    assert failed is not None
+    assert failed["status"] == "failed"
+    assert archify.calls == 0
+    assert "visibly marked as observed" in failed["diagnostic"]
+
+
+def test_context_overflow_must_be_acknowledged_with_owner_and_count(tmp_path):
+    project = tmp_path / "project"
+    store = JobStore(project)
+    dossier = _dossier_with_external_context(project)
+    dossier["context"]["omitted_primary_node_count"] = 2
+    dossier["context"]["overflow"] = [{
+        "owner": {"id": "pkg/core", "label": "Core"},
+        "node_count": 2,
+        "node_types": {"function": 2},
+        "directions": {"outgoing": 2},
+        "evidence_origins": ["parser"],
+        "relationship_count": 2,
+    }]
+    store.create_request(dossier, event_stream=io.StringIO())
+
+    class SilentOverflowAuthor:
+        def author(self, request, diagnostic=""):
+            return _architecture_with_external_context()
+
+    archify = FixtureArchify(store)
+    failed = RefinementAgent(
+        store,
+        SilentOverflowAuthor(),
+        archify,
+        agent_id="fixture-agent",
+        max_repair_rounds=0,
+    ).process_next()
+
+    assert failed is not None
+    assert failed["status"] == "failed"
+    assert archify.calls == 0
+    assert "external context overflow" in failed["diagnostic"]
 
 
 def test_refine_once_cli_consumes_agent_authored_files(tmp_path, monkeypatch, capsys):

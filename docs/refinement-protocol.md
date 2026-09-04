@@ -29,8 +29,12 @@ remain independent.
 ```
 
 The dossier contains the selected subject, owned file scope and hashes,
-internal graph facts, direct boundary facts, signatures, contracts, risks,
-runtime evidence, locations, and origin tags. It contains no source text.
+internal graph facts, bounded cross-subject facts, signatures, contracts,
+risks, runtime evidence, locations, and origin tags. It contains no source
+text. Contract version 2 adds `source_scope.external_files`,
+`relationships.external_context`, and the context policy/selection/overflow
+summary; existing `nodes.boundary` and `relationships.boundary` remain the
+compatibility names for selected one-hop context.
 
 FlowSight commits `request.json` and `status.json` before emitting one compact
 `refinement.requested` JSON line. The event contains only the event/job/subject/
@@ -67,6 +71,32 @@ Successful publication writes the checked specification, self-contained HTML,
 reverse map, identity-bound receipt, and `result.json` through staging files,
 with result metadata committed last. The receipt retains Archify's exact SHA,
 byte-count, and validation claims under `archify_delivery`.
+
+## Bounded cross-module context
+
+Only direct incoming or outgoing relationships with parser/runtime provenance
+are eligible by default. An optional critical-path extension must name an
+existing node, carry a non-empty justification, and connect one evidenced hop
+at a time to the current frontier. Disconnected suggestions and LLM-created
+topology are rejected.
+
+The default primary budget is two external reading subjects and six external
+nodes. Subjects with more direct evidence rank first, runtime-observed evidence
+breaks ties, and slots are distributed round-robin across the chosen subjects.
+Anything outside either budget becomes a truthful aggregate grouped by owner,
+with node type, direction, origin, relationship count, and omitted count. Only
+files backing selected primary context enter `source_scope.external_files` and
+the dossier fingerprint.
+
+Every selected context node retains its exact primary owner, parser signature,
+source location, evidence origin, hop, direction, and any critical-path
+justification. The Agent delivery gate requires context components to use the
+Archify `external` visual type, display owner and location, retain exact code
+identifiers, and sit in owner-labelled external boundaries separate from the
+selected subject. Runtime edges additionally require an observed label and
+emphasis styling; a runtime view is still forbidden without runtime evidence.
+If the dossier contains overflow, an owner-and-count aggregate must appear in
+the artifact cards.
 
 ## Result acceptance
 
