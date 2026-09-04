@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, TextIO
 
 ACTIVE_OR_REUSABLE = frozenset({"pending", "claimed", "generating", "validating", "ready"})
+ACTIVE = frozenset({"claimed", "generating", "validating"})
+NEXT_STATE = {"claimed": "generating", "generating": "validating"}
 _JOB_ID = re.compile(r"^job-[0-9a-f]{20}(?:-[0-9]+)?$")
 
 
@@ -130,6 +132,98 @@ class JobStore:
             self._write_json(self.status_path(job_id), status)
             return status
 
+    def claim(self, job_id: str, *, agent_id: str) -> dict[str, Any]:
+        with self._lock:
+            status = self.get_status(job_id)
+            if status["status"] != "pending":
+                raise ValueError("only a pending job can be claimed")
+            for other in self._statuses():
+                if other["job_id"] != job_id and other.get("status") in ACTIVE:
+                    raise ValueError("another refinement job is already active")
+            return self._set_status(status, "claimed", "claimed", agent_id=agent_id)
+
+    def advance(self, job_id: str, next_status: str) -> dict[str, Any]:
+        with self._lock:
+            status = self.get_status(job_id)
+            expected = NEXT_STATE.get(status["status"])
+            if next_status != expected:
+                raise ValueError(f"cannot advance {status['status']} to {next_status}")
+            return self._set_status(status, next_status, next_status)
+
+    def fail(self, job_id: str, diagnostic: str) -> dict[str, Any]:
+        with self._lock:
+            status = self.get_status(job_id)
+            if status["status"] in {"ready", "cancelled"}:
+                raise ValueError(f"cannot fail a {status['status']} job")
+            return self._set_status(
+                status,
+                "failed",
+                "failed",
+                diagnostic=str(diagnostic)[:1000],
+                artifact_available=False,
+            )
+
+    def accept_result(self, job_id: str) -> dict[str, Any]:
+        """Independently validate Agent result metadata and register its artifact."""
+
+        try:
+            with self._lock:
+                status = self.get_status(job_id)
+                if status["status"] != "validating":
+                    raise ValueError("job must be validating before accepting a result")
+                result_path = self.job_dir(job_id) / "result.json"
+                if not result_path.is_file():
+                    raise ValueError("missing result metadata")
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+                self._match_identity(result, status, "result")
+                artifact = self._validated_result_path(job_id, result.get("artifact_path"), "artifact")
+                specification = self._validated_result_path(
+                    job_id, result.get("specification_path"), "specification"
+                )
+                receipt_path = self._validated_result_path(job_id, result.get("receipt_path"), "receipt")
+                if not artifact.is_file():
+                    raise ValueError("missing artifact HTML")
+                if not specification.is_file():
+                    raise ValueError("missing Archify specification")
+                if not receipt_path.is_file():
+                    raise ValueError("missing delivery receipt")
+                try:
+                    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError as exc:
+                    raise ValueError("invalid delivery receipt") from exc
+                self._match_identity(receipt, status, "delivery receipt")
+                if receipt.get("success") is not True:
+                    raise ValueError("delivery receipt reports failure")
+                return self._set_status(
+                    status,
+                    "ready",
+                    "ready",
+                    artifact_available=True,
+                    artifact_path=self._relative(artifact),
+                    specification_path=self._relative(specification),
+                    receipt_path=self._relative(receipt_path),
+                    artifact_url=f"/api/refinements/{job_id}/artifact",
+                    archify_version=str(receipt.get("archify_version", "")),
+                    diagnostic="",
+                )
+        except (OSError, KeyError, json.JSONDecodeError, ValueError) as exc:
+            try:
+                self.fail(job_id, str(exc))
+            except ValueError:
+                pass
+            if isinstance(exc, ValueError):
+                raise
+            raise ValueError(str(exc)) from exc
+
+    def artifact_path(self, job_id: str) -> Path:
+        status = self.get_status(job_id)
+        if status.get("status") != "ready" or status.get("artifact_available") is not True:
+            raise KeyError("artifact is not registered as ready")
+        path = self._validated_result_path(job_id, status.get("artifact_path"), "artifact")
+        if not path.is_file():
+            raise KeyError("registered artifact is missing")
+        return path
+
     def _find_reusable(self, subject_id: str, fingerprint: str) -> dict[str, Any] | None:
         if not self.root.is_dir():
             return None
@@ -145,6 +239,48 @@ class JobStore:
             ):
                 return status
         return None
+
+    def _statuses(self) -> list[dict[str, Any]]:
+        statuses = []
+        for path in sorted(self.root.glob("job-*/status.json")):
+            try:
+                statuses.append(json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError):
+                continue
+        return statuses
+
+    def _set_status(self, status: dict[str, Any], value: str, stage: str, **updates) -> dict[str, Any]:
+        status.update(
+            status=value,
+            stage=stage,
+            display=_display(value),
+            updated_at=_now(),
+            **updates,
+        )
+        self._write_json(self.status_path(status["job_id"]), status)
+        return status
+
+    @staticmethod
+    def _match_identity(payload: dict[str, Any], status: dict[str, Any], label: str) -> None:
+        expected = {
+            "job_id": status["job_id"],
+            "subject_id": status["subject_id"],
+            "input_fingerprint": status["fingerprint"],
+        }
+        for key, value in expected.items():
+            if payload.get(key) != value:
+                raise ValueError(f"{label} {key.replace('_', ' ')} mismatch")
+
+    def _validated_result_path(self, job_id: str, value: Any, label: str) -> Path:
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"missing {label} path")
+        candidate = (self.project_root / value).resolve()
+        job_dir = self.job_dir(job_id).resolve()
+        try:
+            candidate.relative_to(job_dir)
+        except ValueError as exc:
+            raise ValueError(f"{label} path is outside the job directory") from exc
+        return candidate
 
     def _next_job_id(self, base: str) -> str:
         candidate = base

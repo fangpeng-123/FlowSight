@@ -10,6 +10,7 @@ import {
   buildIndexes, buildRenderModel, neighbors, nodeColor, linkColor, linkWidth,
   nodeVal, arrowLen, particles, nodeBaseColor, hasRisk, THEMES, TYPES, EDGES,
   search, topLevelModules, riskRank, domainPipeline, deepReadAction, refinementPresentation,
+  captureExplorationState, restoreExplorationState,
 } from "./adapter.js";
 
 let graph = null;
@@ -20,6 +21,7 @@ const refinements = new Map();
 const T = () => THEMES[theme];
 
 let Graph = null;
+let deepReadSnapshot = null;
 let _dcId = null, _dcT = 0; // single/double-click detection
 const nodeById = (id) => graph && graph.nodes.find((n) => n.id === id);
 const { parentOf } = { parentOf: null }; // set after load
@@ -325,6 +327,9 @@ function deepReadBtn(node) {
   if (presentation && presentation.busy) {
     return `<button class="exp-btn deep-read-btn" disabled>${presentation.label}</button>`;
   }
+  if (current && current.status === "ready" && current.artifact_available) {
+    return `<button class="exp-btn deep-read-btn" onclick="openDeepRead(decodeURIComponent('${encodedId}'))">Open deep read</button>`;
+  }
   return `<button class="exp-btn deep-read-btn" onclick="requestDeepRead(decodeURIComponent('${encodedId}'))">${action.label}</button>`;
 }
 
@@ -346,6 +351,65 @@ async function requestDeepRead(subjectId) {
   }
 }
 window.requestDeepRead = requestDeepRead;
+
+function currentCameraState() {
+  if (!Graph) return null;
+  const camera = Graph.camera();
+  const controls = Graph.controls();
+  return {
+    position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+    target: controls && controls.target
+      ? { x: controls.target.x, y: controls.target.y, z: controls.target.z }
+      : { x: 0, y: 0, z: 0 },
+  };
+}
+
+function openDeepRead(subjectId) {
+  const current = refinements.get(subjectId);
+  if (!current || current.status !== "ready" || !current.artifact_available) return;
+  const panel = document.getElementById("panel");
+  deepReadSnapshot = captureExplorationState({
+    camera: currentCameraState(), expanded, selectedId: state.selectedId,
+    dim: state.dim, theme, panelCollapsed: panel.classList.contains("collapsed"),
+    panelScrollTop: document.getElementById("panel-content").scrollTop,
+  });
+  document.getElementById("cy").style.display = "none";
+  panel.style.display = "none";
+  document.getElementById("legend").style.display = "none";
+  document.querySelector(".hint").style.display = "none";
+  const view = document.getElementById("deep-read-view");
+  document.getElementById("deep-read-crumb").textContent = `Module deep read · ${subjectId}`;
+  document.getElementById("deep-read-frame").src = current.artifact_url;
+  view.hidden = false;
+}
+window.openDeepRead = openDeepRead;
+
+function closeDeepRead() {
+  if (!deepReadSnapshot) return;
+  const snapshot = restoreExplorationState(deepReadSnapshot);
+  document.getElementById("deep-read-view").hidden = true;
+  document.getElementById("deep-read-frame").src = "about:blank";
+  document.getElementById("cy").style.display = "block";
+  const panel = document.getElementById("panel");
+  panel.style.display = "flex";
+  panel.classList.toggle("collapsed", snapshot.panelCollapsed);
+  document.getElementById("legend").style.display = "";
+  document.querySelector(".hint").style.display = "";
+  expanded = snapshot.expanded;
+  state.selectedId = snapshot.selectedId;
+  state.dim = snapshot.dim;
+  state.neigh = snapshot.selectedId ? neighbors(graph, snapshot.selectedId) : new Set();
+  theme = snapshot.theme;
+  document.documentElement.dataset.theme = theme;
+  if (Graph && snapshot.camera) {
+    Graph.cameraPosition(snapshot.camera.position, snapshot.camera.target, 0);
+  }
+  applyTheme();
+  renderPanel(state.selectedId);
+  document.getElementById("panel-content").scrollTop = snapshot.panelScrollTop;
+  deepReadSnapshot = null;
+}
+document.getElementById("deep-read-back").addEventListener("click", closeDeepRead);
 
 async function pollRefinement(subjectId, jobId, attempt) {
   if (attempt >= 120) return;

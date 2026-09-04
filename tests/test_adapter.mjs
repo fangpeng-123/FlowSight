@@ -198,6 +198,39 @@ test("pending refinement is presented truthfully as Waiting for Agent", () => {
   });
 });
 
+test("ready refinement requires an explicit Open deep read action", () => {
+  assert.deepEqual(refinementPresentation({ status: "ready", artifact_available: true }), {
+    label: "Ready",
+    busy: false,
+  });
+});
+
+test("exploration snapshot round-trips camera, graph and panel state exactly", async () => {
+  const { captureExplorationState, restoreExplorationState } = await import("../src/flowsight/web/adapter.js");
+  const snapshot = captureExplorationState({
+    camera: { position: { x: 1, y: 2, z: 3 }, target: { x: 4, y: 5, z: 6 } },
+    expanded: new Set(["mod:pkg", "file:pkg/a.py"]),
+    selectedId: "file:pkg/a.py",
+    dim: "ctr",
+    theme: "light",
+    panelCollapsed: true,
+    panelScrollTop: 37,
+  });
+
+  assert.deepEqual(snapshot, {
+    camera: { position: { x: 1, y: 2, z: 3 }, target: { x: 4, y: 5, z: 6 } },
+    expanded: ["mod:pkg", "file:pkg/a.py"],
+    selectedId: "file:pkg/a.py",
+    dim: "ctr",
+    theme: "light",
+    panelCollapsed: true,
+    panelScrollTop: 37,
+  });
+  const restored = restoreExplorationState(snapshot);
+  assert.deepEqual([...restored.expanded], ["mod:pkg", "file:pkg/a.py"]);
+  assert.deepEqual({ ...restored, expanded: [...restored.expanded] }, snapshot);
+});
+
 // ---- ticket 04: domain entities, four views, ranking, pipeline, search ----
 
 // A domain graph mirroring the voice-agent pipeline: AudioChunk -> Transcript ->

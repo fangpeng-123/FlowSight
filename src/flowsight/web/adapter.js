@@ -117,6 +117,32 @@ export function refinementPresentation(status) {
   };
 }
 
+export function captureExplorationState({
+  camera, expanded, selectedId, dim, theme, panelCollapsed, panelScrollTop,
+}) {
+  return {
+    camera: JSON.parse(JSON.stringify(camera || null)),
+    expanded: [...expanded],
+    selectedId,
+    dim,
+    theme,
+    panelCollapsed: !!panelCollapsed,
+    panelScrollTop: panelScrollTop || 0,
+  };
+}
+
+export function restoreExplorationState(snapshot) {
+  return {
+    camera: JSON.parse(JSON.stringify(snapshot.camera || null)),
+    expanded: new Set(snapshot.expanded || []),
+    selectedId: snapshot.selectedId || null,
+    dim: snapshot.dim || "dep",
+    theme: snapshot.theme || "dark",
+    panelCollapsed: !!snapshot.panelCollapsed,
+    panelScrollTop: snapshot.panelScrollTop || 0,
+  };
+}
+
 // ---- the four views = data subsets over one schema (decision 05) ----
 // dep: structural skeleton (calls/imports/contains/references + runtime data_flow overlay);
 //      domain_entity nodes are advisory and belong to the ds view, so dim them here.

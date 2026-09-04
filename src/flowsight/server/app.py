@@ -118,8 +118,18 @@ def make_handler(state: GraphState, *, event_stream=None):
                 from flowsight.server.enrich_api import handle_enrich
                 handle_enrich(self, state)
                 return
-            if self.path.startswith("/api/refinements/"):
-                job_id = self.path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+            clean_path = self.path.split("?", 1)[0]
+            refinement_parts = clean_path.strip("/").split("/")
+            if len(refinement_parts) == 4 and refinement_parts[:2] == ["api", "refinements"] and refinement_parts[3] == "artifact":
+                job_id = refinement_parts[2]
+                try:
+                    artifact = state.refinements.artifact_path(job_id)
+                    self._serve_path(artifact, "text/html; charset=utf-8")
+                except KeyError as exc:
+                    self._json({"ok": False, "error": str(exc)}, 404)
+                return
+            if len(refinement_parts) == 3 and refinement_parts[:2] == ["api", "refinements"]:
+                job_id = refinement_parts[2]
                 try:
                     self._json(state.refinements.get_status(job_id))
                 except KeyError as exc:
@@ -165,6 +175,10 @@ def make_handler(state: GraphState, *, event_stream=None):
 
         def _serve_file(self, name: str, ctype: str):
             full = os.path.join(WEB_DIR, name)
+            self._serve_path(full, ctype)
+
+        def _serve_path(self, path, ctype: str):
+            full = os.fspath(path)
             if not os.path.isfile(full):
                 self.send_error(404, "Not found")
                 return

@@ -21,7 +21,10 @@ remain independent.
 .flowsight/refinements/jobs/<job-id>/
   request.json     immutable request, dossier, fingerprint, source scope
   status.json      mutable state presented to the browser
-  result.json      expected Agent result metadata (introduced by Issue #5)
+  result.json      Agent result metadata
+  specification.json
+  artifact.html
+  delivery-receipt.json
 ```
 
 The dossier contains the selected subject, owned file scope and hashes,
@@ -32,3 +35,16 @@ FlowSight commits `request.json` and `status.json` before emitting one compact
 `refinement.requested` JSON line. The event contains only the event/job/subject/
 project identifiers plus project-relative request and expected-result paths.
 An Agent must scan existing pending jobs before relying on new events.
+
+## Result acceptance
+
+The state path is `pending → claimed → generating → validating → ready`, with
+`failed` and `cancelled` as explicit non-ready states. Diagnostics are bounded
+to 1000 characters.
+
+FlowSight registers a result only while the job is validating and only when the
+result and delivery receipt match its job ID, subject ID, and input fingerprint;
+the receipt reports success; and the specification, receipt, and HTML paths all
+exist inside that job directory. A ready artifact is served only from
+`GET /api/refinements/<job-id>/artifact`. Filesystem paths supplied by a browser
+are never accepted.
