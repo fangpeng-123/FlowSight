@@ -1,4 +1,4 @@
-"""FlowSight CLI: ``flowsight index <path>`` / ``flowsight serve <path>``.
+"""FlowSight CLI: index, serve, trace, and external-Agent refinement tools.
 
 - index: walk a Python project and emit a graph JSON document (ticket 01)
 - serve: build the graph and serve the 3D view locally (ticket 02)
@@ -46,6 +46,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                          help="capture argument and return values (off by default for privacy)")
     p_trace.add_argument("--max-stack-depth", type=int, default=None)
 
+    p_refine = sub.add_parser(
+        "refine",
+        help="let the monitoring Agent consume one pending module deep-read job",
+    )
+    p_refine.add_argument("path", help="path to the Python project")
+    p_refine.add_argument("--once", action="store_true", required=True,
+                          help="scan durable pending work and process at most one job")
+    p_refine.add_argument("--spec", required=True,
+                          help="Architecture JSON authored by the external Agent")
+    p_refine.add_argument("--reverse-map", required=True,
+                          help="JSON map from Archify component IDs to FlowSight node IDs")
+    p_refine.add_argument("--archify-root", required=True,
+                          help="path to the copied Archify package")
+    p_refine.add_argument("--agent-id", default="flowsight-monitoring-agent")
+
     args = parser.parse_args(argv)
 
     if args.command == "index":
@@ -54,6 +69,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_serve(args)
     if args.command == "trace":
         return _cmd_trace(args)
+    if args.command == "refine":
+        return _cmd_refine(args)
     return 1
 
 
@@ -121,6 +138,33 @@ def _cmd_trace(args) -> int:
         print(f"trace: correlated against {args.project} -> {overlay_out} ({n_df} runtime data_flow edges)",
               file=sys.stderr)
     return 0
+
+
+def _cmd_refine(args) -> int:
+    """Consume once; FlowSight intentionally does not start or host an Agent."""
+
+    from flowsight.refinement import agent as refinement_agent
+    from flowsight.refinement.jobs import JobStore
+
+    try:
+        store = JobStore(args.path)
+        author = refinement_agent.FileArchitectureAuthor(args.spec, args.reverse_map)
+        archify = refinement_agent.ArchifyRunner(args.archify_root)
+        status = refinement_agent.RefinementAgent(
+            store,
+            author,
+            archify,
+            agent_id=args.agent_id,
+            max_repair_rounds=0,
+        ).process_next()
+    except ValueError as exc:
+        print(json.dumps({"status": "error", "diagnostic": str(exc)}, ensure_ascii=False))
+        return 4
+    if status is None:
+        print(json.dumps({"status": "idle", "display": "No pending refinement jobs"}))
+        return 0
+    print(json.dumps(status, ensure_ascii=False, sort_keys=True))
+    return 0 if status["status"] == "ready" else 5
 
 
 if __name__ == "__main__":

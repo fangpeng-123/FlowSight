@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "FlowSight Runtime Overlay 模块深读",
+    "subtitle": "从 trace 采集到 GraphDocument 运行时覆盖；拓扑均来自 parser 证据",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "visual_preset": "blueprint",
+    "viewBox": [980, 700],
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "backend": {"label": "parser 拓扑", "visible": true}
+      }
+    },
+    "views": [
+      {
+        "id": "entrypoints",
+        "label": "入口与采集",
+        "focus": ["runTrace", "ingestTrace", "loadTrace", "overlayGraph"],
+        "note": "命令执行或既有文件进入同一 trace 读取边界。"
+      },
+      {
+        "id": "correlation",
+        "label": "关联主路径",
+        "focus": ["overlayGraph", "correlate", "eventPairs", "divergence", "applyOverlay"],
+        "note": "把事件匹配到 parser 节点，再计算偏差并写回图文档。"
+      }
+    ]
+  },
+  "components": [
+    {"id": "runTrace", "type": "backend", "label": "run_trace", "sublabel": "trace.py:35 · parser · 执行采集", "pos": [40, 110], "size": [190, 76]},
+    {"id": "ingestTrace", "type": "backend", "label": "ingest_trace", "sublabel": "trace.py:86 · parser · 导入既有轨迹", "pos": [40, 260], "size": [190, 76]},
+    {"id": "loadTrace", "type": "backend", "label": "load_trace", "sublabel": "trace.py:77 · parser · JSON 边界", "pos": [275, 260], "size": [190, 76]},
+    {"id": "overlayGraph", "type": "backend", "label": "overlay_graph_dict", "sublabel": "trace.py:97 · parser · 编排入口", "pos": [275, 410], "size": [190, 76]},
+    {"id": "correlate", "type": "backend", "label": "correlate", "sublabel": "correlator.py:112 · parser · 关联核心", "pos": [510, 250], "size": [190, 76]},
+    {"id": "eventPairs", "type": "backend", "label": "_event_pairs", "sublabel": "correlator.py:297 · parser · 调用配对", "pos": [745, 110], "size": [190, 76]},
+    {"id": "divergence", "type": "backend", "label": "_divergence", "sublabel": "correlator.py:403 · parser · 偏差分类", "pos": [745, 250], "size": [190, 76]},
+    {"id": "applyOverlay", "type": "backend", "label": "apply_overlay", "sublabel": "correlator.py:170 · parser · 写回 GraphDocument", "pos": [745, 410], "size": [190, 76]}
+  ],
+  "boundaries": [
+    {"kind": "region", "label": "内部 · Runtime Overlay reading subject", "wraps": ["runTrace", "ingestTrace", "loadTrace", "overlayGraph", "correlate", "eventPairs", "divergence", "applyOverlay"], "pad": 28}
+  ],
+  "connections": [
+    {"id": "ingest-load", "from": "ingestTrace", "to": "loadTrace", "label": "calls", "variant": "default"},
+    {"id": "overlay-correlate", "from": "overlayGraph", "to": "correlate", "label": "trace events", "variant": "emphasis"},
+    {"id": "correlate-pairs", "from": "correlate", "to": "eventPairs", "label": "calls", "variant": "default"},
+    {"id": "correlate-divergence", "from": "correlate", "to": "divergence", "label": "classify", "variant": "default", "labelDy": 26},
+    {"id": "overlay-apply", "from": "overlayGraph", "to": "applyOverlay", "label": "mutate graph", "variant": "emphasis"}
+  ],
+  "cards": [
+    {"dot": "cyan", "title": "职责（LLM 建议）", "items": ["把 VizTracer 事件关联到 parser 图节点", "将实际调用与预期调用的差异写回 GraphDocument"]},
+    {"dot": "emerald", "title": "输入与输出（parser 证据）", "items": ["输入：Chrome trace JSON 与 parser skeleton", "输出：带 runtime attrs、data_flow 边和 divergence 的图文档"]},
+    {"dot": "amber", "title": "风险（LLM 建议）", "items": ["路径与函数名匹配存在歧义时会产生 unmatched 事件", "参数和返回值日志默认关闭，避免敏感数据泄露"]},
+    {"dot": "slate", "title": "运行证据", "items": ["本次 dossier 未包含命中该模块的 runtime 观测，因此按契约省略运行视图", "其余未展示 helper 以聚合说明代替，共保留 8 个主节点"]}
+  ]
+}

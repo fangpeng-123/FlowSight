@@ -132,15 +132,34 @@ class JobStore:
             self._write_json(self.status_path(job_id), status)
             return status
 
+    def pending(self) -> list[dict[str, Any]]:
+        """Return durable pending work in creation order for recovering Agents."""
+
+        return sorted(
+            (status for status in self._statuses() if status.get("status") == "pending"),
+            key=lambda status: (status.get("created_at", ""), status.get("job_id", "")),
+        )
+
+    def read_request(self, job_id: str) -> dict[str, Any]:
+        path = self.request_path(job_id)
+        if not path.is_file():
+            raise KeyError(f"missing request for job: {job_id}")
+        return json.loads(path.read_text(encoding="utf-8"))
+
     def claim(self, job_id: str, *, agent_id: str) -> dict[str, Any]:
         with self._lock:
-            status = self.get_status(job_id)
-            if status["status"] != "pending":
-                raise ValueError("only a pending job can be claimed")
-            for other in self._statuses():
-                if other["job_id"] != job_id and other.get("status") in ACTIVE:
+            self._acquire_active_claim(job_id, agent_id)
+            try:
+                status = self.get_status(job_id)
+                if status["status"] != "pending":
                     raise ValueError("another refinement job is already active")
-            return self._set_status(status, "claimed", "claimed", agent_id=agent_id)
+                for other in self._statuses():
+                    if other["job_id"] != job_id and other.get("status") in ACTIVE:
+                        raise ValueError("another refinement job is already active")
+                return self._set_status(status, "claimed", "claimed", agent_id=agent_id)
+            except Exception:
+                self._release_active_claim(job_id)
+                raise
 
     def advance(self, job_id: str, next_status: str) -> dict[str, Any]:
         with self._lock:
@@ -150,18 +169,34 @@ class JobStore:
                 raise ValueError(f"cannot advance {status['status']} to {next_status}")
             return self._set_status(status, next_status, next_status)
 
+    def restart_generation(self, job_id: str, diagnostic: str) -> dict[str, Any]:
+        """Return a validating job to generation for one bounded repair round."""
+
+        with self._lock:
+            status = self.get_status(job_id)
+            if status["status"] != "validating":
+                raise ValueError("only a validating job can begin a repair")
+            return self._set_status(
+                status,
+                "generating",
+                "repairing",
+                diagnostic=str(diagnostic)[:1000],
+            )
+
     def fail(self, job_id: str, diagnostic: str) -> dict[str, Any]:
         with self._lock:
             status = self.get_status(job_id)
             if status["status"] in {"ready", "cancelled"}:
                 raise ValueError(f"cannot fail a {status['status']} job")
-            return self._set_status(
+            failed = self._set_status(
                 status,
                 "failed",
                 "failed",
                 diagnostic=str(diagnostic)[:1000],
                 artifact_available=False,
             )
+            self._release_active_claim(job_id)
+            return failed
 
     def accept_result(self, job_id: str) -> dict[str, Any]:
         """Independently validate Agent result metadata and register its artifact."""
@@ -194,7 +229,7 @@ class JobStore:
                 self._match_identity(receipt, status, "delivery receipt")
                 if receipt.get("success") is not True:
                     raise ValueError("delivery receipt reports failure")
-                return self._set_status(
+                ready = self._set_status(
                     status,
                     "ready",
                     "ready",
@@ -206,6 +241,8 @@ class JobStore:
                     archify_version=str(receipt.get("archify_version", "")),
                     diagnostic="",
                 )
+                self._release_active_claim(job_id)
+                return ready
         except (OSError, KeyError, json.JSONDecodeError, ValueError) as exc:
             try:
                 self.fail(job_id, str(exc))
@@ -289,6 +326,36 @@ class JobStore:
             candidate = f"{base}-{suffix}"
             suffix += 1
         return candidate
+
+    @property
+    def _active_claim_path(self) -> Path:
+        return self.root / ".active-claim.json"
+
+    def _acquire_active_claim(self, job_id: str, agent_id: str) -> None:
+        payload = json.dumps(
+            {"job_id": job_id, "agent_id": agent_id, "claimed_at": _now()},
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+        try:
+            descriptor = os.open(
+                self._active_claim_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            )
+        except FileExistsError as exc:
+            raise ValueError("another refinement job is already active") from exc
+        try:
+            os.write(descriptor, payload)
+        finally:
+            os.close(descriptor)
+
+    def _release_active_claim(self, job_id: str) -> None:
+        try:
+            payload = json.loads(self._active_claim_path.read_text(encoding="utf-8"))
+            if payload.get("job_id") == job_id:
+                self._active_claim_path.unlink()
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return
 
     def _relative(self, path: Path) -> str:
         return path.relative_to(self.project_root).as_posix()

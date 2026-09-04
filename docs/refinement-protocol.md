@@ -24,6 +24,7 @@ remain independent.
   result.json      Agent result metadata
   specification.json
   artifact.html
+  reverse-id-map.json
   delivery-receipt.json
 ```
 
@@ -35,6 +36,37 @@ FlowSight commits `request.json` and `status.json` before emitting one compact
 `refinement.requested` JSON line. The event contains only the event/job/subject/
 project identifiers plus project-relative request and expected-result paths.
 An Agent must scan existing pending jobs before relying on new events.
+
+## Agent consumption and Archify delivery
+
+The monitoring Agent authors exactly one `diagram_type: "architecture"` JSON
+document plus a reverse map from Archify component IDs to FlowSight node IDs.
+It can then consume the oldest durable request with:
+
+```text
+flowsight refine <project> --once \
+  --spec <architecture.json> \
+  --reverse-map <reverse-id-map.json> \
+  --archify-root <archify-package>
+```
+
+This command is an Agent-side adapter; `flowsight serve` never starts or hosts
+an Agent. Claiming uses an exclusive project-local active-claim file, so
+replayed events and separate `JobStore` instances cannot process two jobs at
+once. The reusable `RefinementAgent` API supports the initial candidate plus at
+most two focused repairs. The file-based CLI performs one frozen candidate per
+invocation, allowing the external Agent to revise its source before retrying.
+
+Before Archify runs, FlowSight rejects any component without a reverse mapping
+to a dossier node and any connection without parser- or runtime-origin edge
+evidence. Runtime guided views are rejected when the dossier has no observed
+runtime facts. Archify is invoked only as `deliver architecture ... --quality
+showcase --json`; no diagram type is auto-selected.
+
+Successful publication writes the checked specification, self-contained HTML,
+reverse map, identity-bound receipt, and `result.json` through staging files,
+with result metadata committed last. The receipt retains Archify's exact SHA,
+byte-count, and validation claims under `archify_delivery`.
 
 ## Result acceptance
 

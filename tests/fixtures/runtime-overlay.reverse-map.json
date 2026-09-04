@@ -1,0 +1,10 @@
+{
+  "runTrace": "func:src/flowsight/overlay/trace.py::run_trace@35",
+  "ingestTrace": "func:src/flowsight/overlay/trace.py::ingest_trace@86",
+  "loadTrace": "func:src/flowsight/overlay/trace.py::load_trace@77",
+  "overlayGraph": "func:src/flowsight/overlay/trace.py::overlay_graph_dict@97",
+  "correlate": "func:src/flowsight/overlay/correlator.py::correlate@112",
+  "eventPairs": "func:src/flowsight/overlay/correlator.py::_event_pairs@297",
+  "divergence": "func:src/flowsight/overlay/correlator.py::_divergence@403",
+  "applyOverlay": "func:src/flowsight/overlay/correlator.py::apply_overlay@170"
+}
