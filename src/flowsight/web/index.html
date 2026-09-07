@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <title>FlowSight · 代码库知识图谱</title>
-<link rel="stylesheet" href="style.css" />
+<link rel="stylesheet" href="style.css?v=20260907.2" />
 </head>
 <body>
 <div id="app">
@@ -20,9 +20,9 @@
       <div class="dim-tab" data-dim="risk"><span class="dot" style="background:#ef4444"></span>风险</div>
     </div>
     <div class="toggles">
-      <button class="tbtn" id="reindex-btn" title="重新索引">↻ 索引</button>
-      <button class="tbtn" id="theme-toggle" title="切换明暗主题">🌙 暗色</button>
-      <button class="tbtn" id="panel-toggle" title="收起/展开侧栏">⇥ 侧栏</button>
+      <button class="tbtn" id="reindex-btn" title="重新索引" aria-label="重新索引"><span class="tbtn-icon" aria-hidden="true">↻</span><span class="tbtn-label">索引</span></button>
+      <button class="tbtn" id="theme-toggle" title="切换为亮色主题" aria-label="切换为亮色主题"><span class="tbtn-icon" aria-hidden="true">🌙</span><span class="tbtn-label">暗色</span></button>
+      <button class="tbtn" id="panel-toggle" title="收起或展开侧栏" aria-label="收起或展开侧栏"><span class="tbtn-icon" aria-hidden="true">⇥</span><span class="tbtn-label">侧栏</span></button>
     </div>
   </div>
   <div id="main">
@@ -90,6 +90,6 @@
   }
   window.addEventListener('engines-ready',()=>{ if(!window.__esmOK && typeof ForceGraph3D==='undefined'){ bootLoader(); } });
 </script>
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=20260907.2"></script>
 </body>
 </html>

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 from collections import Counter
 from dataclasses import dataclass
@@ -482,18 +483,62 @@ def _validate_context_presentation(
 
     overflow = (dossier.get("context") or {}).get("overflow", [])
     if overflow:
-        narrative = json.dumps(specification.get("cards", []), ensure_ascii=False).lower()
-        if not any(marker in narrative for marker in ("overflow", "omitted", "aggregate", "省略", "聚合", "未展示")):
+        markers = ("overflow", "omitted", "aggregate", "省略", "聚合", "未展示")
+        card_items = [
+            str(item).lower()
+            for card in specification.get("cards", [])
+            for item in card.get("items", [])
+        ]
+        if not any(any(marker in item for marker in markers) for item in card_items):
             raise ValueError("external context overflow must be acknowledged as an aggregate")
+
+        owner_patterns = []
         for aggregate in overflow:
             owner = aggregate.get("owner") or {}
-            owner_visible = any(
-                str(owner.get(field, "")) and str(owner[field]).lower() in narrative
+            aliases = [
+                str(owner[field]).lower()
                 for field in ("id", "label")
+                if owner.get(field)
+            ]
+            owner_patterns.append([
+                re.compile(rf"(?<![\w./-]){re.escape(alias)}(?![\w./-])")
+                for alias in aliases
+            ])
+
+        matched_items: set[int] = set()
+        for aggregate_index, aggregate in enumerate(overflow):
+            count_pattern = re.compile(
+                rf"(?<!\d){re.escape(str(aggregate.get('node_count', '')))}(?!\d)"
             )
-            count_visible = str(aggregate.get("node_count", "")) in narrative
-            if not owner_visible or not count_visible:
-                raise ValueError("external context overflow must display each owner and omitted count")
+            matches = []
+            for item_index, item in enumerate(card_items):
+                if not any(marker in item for marker in markers):
+                    continue
+                owners_in_item = {
+                    index
+                    for index, patterns in enumerate(owner_patterns)
+                    if any(pattern.search(item) for pattern in patterns)
+                }
+                if owners_in_item == {aggregate_index} and count_pattern.search(item):
+                    matches.append(item_index)
+            if not matches:
+                owner = aggregate.get("owner") or {}
+                raise ValueError(
+                    "external context overflow must bind owner "
+                    f"{owner.get('id') or owner.get('label')!r} to omitted count "
+                    f"{aggregate.get('node_count')!r} in one dedicated card item"
+                )
+            matched_items.update(matches)
+
+        for item_index, item in enumerate(card_items):
+            if item_index in matched_items or not any(marker in item for marker in markers):
+                continue
+            looks_external = "external" in item or "外部" in item or "/" in item
+            has_node_count = bool(re.search(r"\d+\s*(?:nodes?|个?节点)", item))
+            if looks_external and has_node_count:
+                raise ValueError(
+                    "external context overflow contains an unexpected, ambiguous, or stale aggregate claim"
+                )
 
 
 def _verify_delivery_bytes(

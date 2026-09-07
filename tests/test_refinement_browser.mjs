@@ -9,8 +9,11 @@ function browserContext(fetch) {
   const element = id => {
     if (!elements.has(id)) elements.set(id, {
       style: { setProperty() {} }, classList: { contains() { return false; }, toggle() {} },
-      addEventListener() {}, querySelector() { return element('child'); },
-      setAttribute() {}, innerHTML: '', textContent: '', dataset: {},
+      addEventListener() {}, querySelector(selector) { return element(`${id}:${selector}`); },
+      attributes: {},
+      setAttribute(name, value) { this.attributes[name] = value; },
+      getAttribute(name) { return this.attributes[name]; },
+      innerHTML: '', textContent: '', dataset: {},
     });
     return elements.get(id);
   };
@@ -55,6 +58,14 @@ test('stale artifact offers explicit regeneration and labelled previous output',
   assert.match(html, /Open previous deep read/);
 });
 
+test('pending deep read shows the truthful waiting state and a cancel action', () => {
+  const context = browserContext(async () => graphResponse());
+  vm.runInContext("refinements.set('pkg/api', {status:'pending', stage:'waiting_for_agent', job_id:'job-1'})", context);
+  const html = vm.runInContext("deepReadBtn({attrs:{reading_subject:{id:'pkg/api'}}})", context);
+  assert.match(html, /Waiting for Agent/);
+  assert.match(html, /Cancel pending deep read/);
+});
+
 test('opening cached ready output rechecks freshness before navigation', async () => {
   const context = browserContext(async () => ({ ok: true, json: async () => ({
     status: 'stale', job_id: 'old', fallback_artifact_available: true,
@@ -64,4 +75,21 @@ test('opening cached ready output rechecks freshness before navigation', async (
   await vm.runInContext("openDeepRead('pkg/api')", context);
   assert.equal(vm.runInContext("refinements.get('pkg/api').status", context), 'stale');
   assert.equal(vm.runInContext("document.getElementById('deep-read-frame').src", context), undefined);
+});
+
+test('theme switching updates the structured compact button without replacing it', () => {
+  const context = browserContext(async () => graphResponse());
+  vm.runInContext("theme = 'light'; applyTheme({ preserveCamera: true })", context);
+  assert.equal(
+    vm.runInContext("document.getElementById('theme-toggle').querySelector('.tbtn-icon').textContent", context),
+    '☀️',
+  );
+  assert.equal(
+    vm.runInContext("document.getElementById('theme-toggle').querySelector('.tbtn-label').textContent", context),
+    '亮色',
+  );
+  assert.equal(
+    vm.runInContext("document.getElementById('theme-toggle').getAttribute('aria-label')", context),
+    '切换为暗色主题',
+  );
 });

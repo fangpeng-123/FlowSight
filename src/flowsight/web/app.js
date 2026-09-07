@@ -334,7 +334,7 @@ function deepReadBtn(node) {
   }
   const presentation = refinementPresentation(current);
   if (current && current.status === "pending") {
-    return `<button class="exp-btn deep-read-btn" onclick="cancelDeepRead(decodeURIComponent('${encodedId}'), '${current.job_id}')">Cancel pending deep read</button>`;
+    return `<div class="empty" role="status">${presentation.label}</div><button class="exp-btn deep-read-btn" onclick="cancelDeepRead(decodeURIComponent('${encodedId}'), '${current.job_id}')">Cancel pending deep read</button>`;
   }
   if (presentation && presentation.busy) {
     return `<button class="exp-btn deep-read-btn" disabled>${presentation.label}</button>`;
@@ -768,7 +768,12 @@ function syncLegendVars() {
 }
 function applyTheme({ preserveCamera = false } = {}) {
   document.documentElement.setAttribute("data-theme", theme);
-  document.getElementById("theme-toggle").textContent = theme === "dark" ? "🌙 暗色" : "☀️ 亮色";
+  const themeToggle = document.getElementById("theme-toggle");
+  themeToggle.querySelector(".tbtn-icon").textContent = theme === "dark" ? "🌙" : "☀️";
+  themeToggle.querySelector(".tbtn-label").textContent = theme === "dark" ? "暗色" : "亮色";
+  const nextThemeLabel = theme === "dark" ? "切换为亮色主题" : "切换为暗色主题";
+  themeToggle.setAttribute("aria-label", nextThemeLabel);
+  themeToggle.title = nextThemeLabel;
   syncLegendVars(); refreshGraph({ resume: !preserveCamera }); renderPanel(state.selectedId);
 }
 document.getElementById("theme-toggle").addEventListener("click", () => { theme = theme === "dark" ? "light" : "dark"; applyTheme(); });

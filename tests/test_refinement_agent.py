@@ -9,7 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from flowsight.refinement.agent import AuthoredArchitecture, RefinementAgent
+from flowsight.refinement.agent import (
+    AuthoredArchitecture,
+    RefinementAgent,
+    _validate_authorship,
+)
 from flowsight.cli import main
 from flowsight.refinement.jobs import JobStore
 
@@ -531,6 +535,53 @@ def test_context_overflow_must_be_acknowledged_with_owner_and_count(tmp_path):
     assert failed["status"] == "failed"
     assert archify.calls == 0
     assert "external context overflow" in failed["diagnostic"]
+
+
+def test_context_overflow_owner_and_count_cannot_be_spliced_across_cards(tmp_path):
+    project = tmp_path / "project"
+    dossier = _dossier_with_external_context(project)
+    dossier["context"]["omitted_primary_node_count"] = 2
+    dossier["context"]["overflow"] = [{
+        "owner": {"id": "pkg/core", "label": "Core"},
+        "node_count": 2,
+        "node_types": {"function": 2},
+        "directions": {"outgoing": 2},
+        "evidence_origins": ["parser"],
+        "relationship_count": 2,
+    }]
+    authored = _architecture_with_external_context()
+    authored.specification["cards"] = [
+        {"title": "External context · parser", "items": ["Core participates in the call path"]},
+        {"title": "Internal curation · parser", "items": ["2 internal helpers omitted"]},
+        {"title": "Obsolete aggregate · parser", "items": ["pkg/legacy aggregate omitted 1 node"]},
+    ]
+
+    with pytest.raises(ValueError, match="external context overflow"):
+        _validate_authorship({"dossier": dossier}, authored)
+
+
+def test_context_overflow_accepts_a_dedicated_owner_count_claim(tmp_path):
+    project = tmp_path / "project"
+    dossier = _dossier_with_external_context(project)
+    dossier["context"]["omitted_primary_node_count"] = 2
+    dossier["context"]["overflow"] = [{
+        "owner": {"id": "pkg/core", "label": "Core"},
+        "node_count": 2,
+        "node_types": {"function": 2},
+        "directions": {"outgoing": 2},
+        "evidence_origins": ["parser"],
+        "relationship_count": 2,
+    }]
+    authored = _architecture_with_external_context()
+    authored.specification["cards"] = [{
+        "title": "Bounded context · parser",
+        "items": [
+            "2 internal helpers omitted",
+            "External context aggregate: pkg/core (Core) omitted 2 nodes",
+        ],
+    }]
+
+    _validate_authorship({"dossier": dossier}, authored)
 
 
 def test_refine_once_cli_consumes_agent_authored_files(tmp_path, monkeypatch, capsys):

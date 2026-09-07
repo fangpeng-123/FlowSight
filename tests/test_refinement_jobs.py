@@ -144,6 +144,29 @@ def test_browser_request_to_waiting_status_end_to_end(tmp_path):
         thread.join(timeout=5)
 
 
+def test_static_web_assets_disable_browser_caching(tmp_path):
+    project = _project(tmp_path)
+    state = GraphState(str(project))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        bodies = {}
+        for path in ("/", "/style.css", "/app.js"):
+            conn.request("GET", path)
+            response = conn.getresponse()
+            bodies[path] = response.read()
+            assert response.status == 200
+            assert response.getheader("Cache-Control") == "no-store"
+        assert b'href="style.css?v=' in bodies["/"]
+        assert b'src="app.js?v=' in bodies["/"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_http_request_accepts_evidenced_critical_path_extension(tmp_path):
     project = _project(tmp_path)
     state = GraphState(str(project))
