@@ -19,6 +19,7 @@ let expanded = new Set();
 let theme = "dark";
 const refinements = new Map();
 const refinementLoads = new Set();
+let refinementEpoch = 0;
 const T = () => THEMES[theme];
 
 let Graph = null;
@@ -29,6 +30,9 @@ const { parentOf } = { parentOf: null }; // set after load
 
 // ---------- load ----------
 async function load() {
+  refinementEpoch += 1;
+  refinements.clear();
+  refinementLoads.clear();
   const r = await fetch("/api/graph");
   graph = await r.json();
   const idx = buildIndexes(graph);
@@ -341,34 +345,47 @@ function deepReadBtn(node) {
   if (current && current.status === "failed" && current.fallback_artifact_available) {
     return `<button class="exp-btn deep-read-btn" onclick="openDeepRead(decodeURIComponent('${encodedId}'))">Open previous deep read</button><button class="exp-btn deep-read-btn" onclick="requestDeepRead(decodeURIComponent('${encodedId}'))">Retry deep read</button>`;
   }
+  if (current && current.status === "stale") {
+    const previous = current.fallback_artifact_available
+      ? `<button class="exp-btn deep-read-btn" onclick="openDeepRead(decodeURIComponent('${encodedId}'))">Open previous deep read</button>` : "";
+    return `<div class="empty">Stale · source or reading context changed</div>${previous}<button class="exp-btn deep-read-btn" onclick="requestDeepRead(decodeURIComponent('${encodedId}'))">Regenerate deep read</button>`;
+  }
   return `<button class="exp-btn deep-read-btn" onclick="requestDeepRead(decodeURIComponent('${encodedId}'))">${action.label}</button>`;
 }
 
 async function loadCurrentRefinement(subjectId) {
+  const epoch = refinementEpoch;
   refinementLoads.add(subjectId);
   try {
     const response = await fetch(`/api/refinements/current?subject_id=${encodeURIComponent(subjectId)}`);
     const status = response.ok ? await response.json() : { status: "missing" };
+    if (epoch !== refinementEpoch) return;
     refinements.set(subjectId, status);
     const presentation = refinementPresentation(status);
     if (presentation && presentation.busy) pollRefinement(subjectId, status.job_id, 0);
   } catch (error) {
+    if (epoch !== refinementEpoch) return;
     refinements.set(subjectId, { status: "failed", display: error.message });
   } finally {
-    refinementLoads.delete(subjectId);
-    if (state.selectedId) renderPanel(state.selectedId);
+    if (epoch === refinementEpoch) {
+      refinementLoads.delete(subjectId);
+      if (state.selectedId) renderPanel(state.selectedId);
+    }
   }
 }
 
 async function cancelDeepRead(subjectId, jobId) {
+  const epoch = refinementEpoch;
   const response = await fetch(`/api/refinements/${encodeURIComponent(jobId)}`, { method: "DELETE" });
   const status = await response.json();
+  if (epoch !== refinementEpoch) return;
   refinements.set(subjectId, response.ok ? status : { status: "failed", display: status.error });
   if (state.selectedId) renderPanel(state.selectedId);
 }
 window.cancelDeepRead = cancelDeepRead;
 
 async function requestDeepRead(subjectId) {
+  const epoch = refinementEpoch;
   try {
     const response = await fetch("/api/refinements", {
       method: "POST",
@@ -376,11 +393,13 @@ async function requestDeepRead(subjectId) {
       body: JSON.stringify({ subject_id: subjectId }),
     });
     const status = await response.json();
+    if (epoch !== refinementEpoch) return;
     if (!response.ok) throw new Error(status.error || `HTTP ${response.status}`);
     refinements.set(subjectId, status);
     renderPanel(state.selectedId);
     pollRefinement(subjectId, status.job_id, 0);
   } catch (error) {
+    if (epoch !== refinementEpoch) return;
     refinements.set(subjectId, { status: "failed", display: error.message });
     renderPanel(state.selectedId);
   }
@@ -399,8 +418,14 @@ function currentCameraState() {
   };
 }
 
-function openDeepRead(subjectId) {
+async function openDeepRead(subjectId) {
+  const epoch = refinementEpoch;
+  const openingCurrent = refinements.get(subjectId)?.status === "ready";
+  await loadCurrentRefinement(subjectId);
+  if (epoch !== refinementEpoch || deepReadSnapshot) return;
   const current = refinements.get(subjectId);
+  // A newly stale result needs an explicit click on its previous-output action.
+  if (openingCurrent && current?.status !== "ready") return;
   const artifactUrl = current && current.status === "ready" && current.artifact_available
     ? current.artifact_url
     : current && current.fallback_artifact_available ? current.fallback_artifact_url : "";
@@ -449,26 +474,29 @@ function closeDeepRead() {
 }
 document.getElementById("deep-read-back").addEventListener("click", closeDeepRead);
 
-async function pollRefinement(subjectId, jobId, attempt) {
+async function pollRefinement(subjectId, jobId, attempt, epoch = refinementEpoch) {
+  if (epoch !== refinementEpoch || refinements.get(subjectId)?.job_id !== jobId) return;
   try {
     const response = await fetch(`/api/refinements/${encodeURIComponent(jobId)}`);
     const status = await response.json();
+    if (epoch !== refinementEpoch || refinements.get(subjectId)?.job_id !== jobId) return;
     if (!response.ok) throw new Error(status.error || `HTTP ${response.status}`);
     refinements.set(subjectId, status);
     if (state.selectedId) renderPanel(state.selectedId);
     const presentation = refinementPresentation(status);
     if (presentation && presentation.busy) {
       const delay = Math.min(1000 + attempt * 100, 5000);
-      setTimeout(() => pollRefinement(subjectId, jobId, attempt + 1), delay);
+      setTimeout(() => pollRefinement(subjectId, jobId, attempt + 1, epoch), delay);
     } else if (status.status === "failed") {
       loadCurrentRefinement(subjectId);
     }
   } catch (error) {
+    if (epoch !== refinementEpoch) return;
     const current = refinements.get(subjectId);
     const presentation = refinementPresentation(current);
     if (presentation && presentation.busy) {
       const delay = Math.min(1000 + attempt * 100, 5000);
-      setTimeout(() => pollRefinement(subjectId, jobId, attempt + 1), delay);
+      setTimeout(() => pollRefinement(subjectId, jobId, attempt + 1, epoch), delay);
     } else {
       refinements.set(subjectId, { status: "failed", display: error.message });
       if (state.selectedId) renderPanel(state.selectedId);

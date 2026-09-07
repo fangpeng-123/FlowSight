@@ -35,7 +35,9 @@ remain independent.
 The dossier contains the selected subject, owned file scope and hashes,
 internal graph facts, bounded cross-subject facts, signatures, contracts,
 risks, runtime evidence, locations, and origin tags. It contains no source
-text. Contract version 3 includes `source_scope.external_files`,
+text. Contract version 4 preserves the exact requested `critical_path_extensions`
+map, including extensions omitted by display budgets, for freshness replay.
+It includes `source_scope.external_files`,
 `relationships.external_context`, and the context policy/selection/overflow
 summary. It also carries a bounded `nodes.critical_path_candidates` allowance
 so the Agent can choose an evidenced second hop after claiming the immutable
@@ -66,6 +68,15 @@ replayed events and separate `JobStore` instances cannot process two jobs at
 once. The reusable `RefinementAgent` API supports the initial candidate plus at
 most two focused repairs. The file-based CLI performs one frozen candidate per
 invocation, allowing the external Agent to revise its source before retrying.
+
+All store state transitions, including browser cancellation and Agent claiming,
+share an OS-backed project-local transaction lock. The OS releases that lock
+when a process exits. Active claims record the local PID and process creation
+identity; a later pending scan marks interrupted work failed and releases its
+claim only after verifying that the owning process exited or its PID was reused.
+Live or inaccessible owners are never evicted by elapsed time. Legacy claims
+without process identity cannot be recovered automatically: after confirming the
+old Agent stopped, an operator can mark that job failed with `JobStore.fail`.
 
 Before Archify runs, FlowSight rejects any component without a reverse mapping
 to a dossier node and any connection without parser- or runtime-origin edge
@@ -117,8 +128,25 @@ FlowSight registers a result only while the job is validating and only when the
 request, result, and delivery receipt match its job ID, subject ID, and input
 fingerprint. It independently verifies the Archify command/type, zero validation
 findings, exact specification/artifact SHA-256 and byte counts, Architecture
-component reverse mappings, and dossier topology before promotion. The accepted
+component reverse mappings, and parser/runtime evidence for every connection
+before promotion. Malformed Architecture JSON becomes a bounded failure instead
+of leaving a generating job behind. Source hashes are checked again before
+promotion so an output generated against changed files cannot replace the last
+verified artifact. The accepted
 files replace the subject's stable current artifact; the previous job becomes
 `stale` and no historical HTML is retained. A ready artifact is served only from
 `GET /api/refinements/<job-id>/artifact`. Filesystem paths supplied by a browser
 are never accepted.
+
+## Freshness and fallback
+
+Status reads check the request's owned and included external source hashes.
+Reindex also recomputes the dossier fingerprint with the request's context
+policy and original critical-path extensions. Changes detected during generation
+are recorded on the active job and rejected at acceptance without interrupting
+its ownership. A changed or missing input marks a ready
+job `stale`, stage `outdated`, with a reason and an explicitly labelled previous
+artifact link. This does not delete the verified HTML. Failed regeneration keeps
+that fallback; successful regeneration marks the previous job `replaced` and
+withdraws its artifact URL. Reloading the browser graph clears cached refinement
+statuses and discards in-flight responses from before the reload.

@@ -5,7 +5,10 @@ fake data, so we assert the extractor recovers its exact structure: nodes, edges
 signatures, fields, line offsets, and trust tags.
 """
 
+import pytest
+
 from flowsight import schema as S
+from flowsight.skeleton.venv import VenvInfo
 from flowsight.skeleton.extractor import extract
 from tests.helpers import (
     by_type,
@@ -46,11 +49,15 @@ def test_modules_are_the_six_packages(fixture_root):
     assert "voice_agent.audio_out" in dotted
 
 
-def test_external_requests_node(fixture_root):
+@pytest.mark.parametrize("installed_path", [None, "/env/site-packages/requests/__init__.py"])
+def test_external_requests_node(fixture_root, monkeypatch, installed_path):
+    original = VenvInfo.find_installed_path
+    monkeypatch.setattr(VenvInfo, "find_installed_path", lambda self, name:
+                        installed_path if name == "requests" else original(self, name))
     doc = extract(fixture_root)
     ext = find_node(doc, "requests", S.EXTERNAL)
     assert ext is not None
-    assert ext.attrs.get("installed") is False  # not installed in the test env
+    assert ext.attrs.get("installed") is (installed_path is not None)
 
 
 def test_pipeline_functions_present(fixture_root):

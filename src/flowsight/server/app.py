@@ -20,7 +20,7 @@ from flowsight.enrich.attacher import enrich_eager, enrich_function
 from flowsight.enrich.cache import EnrichCache
 from flowsight.enrich.llm import from_env
 from flowsight.reading_subjects import ReadingSubjectCatalog, apply_catalog, load_catalog
-from flowsight.refinement.dossier import build_dossier
+from flowsight.refinement.dossier import ContextPolicy, build_dossier
 from flowsight.refinement.jobs import JobStore
 from flowsight.skeleton.extractor import extract
 
@@ -63,6 +63,21 @@ class GraphState:
             apply_overlay(self.doc, result)
             self.divergence = result.divergence
         self._payload = S.doc_to_dict(self.doc)
+        self.refinements.refresh_freshness(self._refinement_fingerprint)
+
+    def _refinement_fingerprint(self, request: dict) -> str:
+        dossier = request["dossier"]
+        context = dossier.get("context") or {}
+        extensions = dossier.get("critical_path_extensions", {
+            node["id"]: node["context"]["justification"]
+            for node in dossier["nodes"].get("boundary", [])
+            if (node.get("context") or {}).get("hop", 1) > 1
+        })
+        return build_dossier(
+            self.doc, self.catalog, request["subject_id"], self.project_path,
+            context_policy=ContextPolicy(**context.get("policy", {})),
+            critical_path_extensions=extensions,
+        )["fingerprint"]
 
     def reindex(self) -> None:
         self._build()

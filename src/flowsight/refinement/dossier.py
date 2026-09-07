@@ -13,7 +13,7 @@ from typing import Any, Mapping
 from flowsight import schema as S
 from flowsight.reading_subjects import ReadingSubject, ReadingSubjectCatalog
 
-DOSSIER_CONTRACT_VERSION = 3
+DOSSIER_CONTRACT_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -145,6 +145,7 @@ def build_dossier(
     }
     dossier: dict[str, Any] = {
         "contract_version": DOSSIER_CONTRACT_VERSION,
+        "critical_path_extensions": extensions,
         "project": {
             "name": doc.project.get("name", ""),
             "id": hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:16],

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from flowsight.refinement.jobs import JobStore, write_json_atomic
+from flowsight.refinement.validation import validate_architecture_shape
 
 MAX_REPAIR_ROUNDS = 2
 
@@ -157,13 +158,16 @@ class RefinementAgent:
                 receipt = self._deliver_candidate(job_id, authored)
                 self._publish(job_id, request, authored, receipt)
                 return self.store.accept_result(job_id)
-            except (KeyError, OSError, TypeError, ValueError, subprocess.SubprocessError) as exc:
+            except Exception as exc:
                 diagnostic = _bounded(str(exc))
                 if attempt >= self.max_repair_rounds:
                     return self.store.fail(job_id, diagnostic)
                 status = self.store.get_status(job_id)
                 if status["status"] == "validating":
                     self.store.restart_generation(job_id, diagnostic)
+            except BaseException:
+                self.store.fail(job_id, "Agent processing was interrupted")
+                raise
         return self.store.fail(job_id, diagnostic)
 
     def _deliver_candidate(
@@ -228,6 +232,7 @@ class RefinementAgent:
 
 def _validate_authorship(request: dict[str, Any], authored: AuthoredArchitecture) -> None:
     specification = authored.specification
+    validate_architecture_shape(specification, authored.reverse_id_map)
     if specification.get("diagram_type") != "architecture":
         raise ValueError("the first integration accepts exactly one Architecture specification")
     if specification.get("schema_version") != 1:

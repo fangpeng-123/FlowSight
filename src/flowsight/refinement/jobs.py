@@ -7,10 +7,12 @@ import json
 import os
 import re
 import sys
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
+
+from flowsight.refinement.locking import ProcessLock, process_identity
+from flowsight.refinement.validation import validate_architecture_shape
 
 ACTIVE_OR_REUSABLE = frozenset({"pending", "claimed", "generating", "validating", "ready"})
 ACTIVE = frozenset({"claimed", "generating", "validating"})
@@ -54,7 +56,7 @@ class JobStore:
         self.root = self.project_root / ".flowsight" / "refinements" / "jobs"
         self.current_root = self.root.parent / "current"
         self.root.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+        self._lock = ProcessLock(self.root / ".state.lock")
 
     def create_request(
         self,
@@ -65,6 +67,7 @@ class JobStore:
         subject_id = dossier["subject"]["id"]
         fingerprint = dossier["fingerprint"]
         with self._lock:
+            self.refresh_freshness()
             reusable = self._find_reusable(subject_id, fingerprint)
             if reusable is not None:
                 return reusable, False
@@ -125,25 +128,80 @@ class JobStore:
         return self.root / job_id
 
     def get_status(self, job_id: str) -> dict[str, Any]:
-        path = self.status_path(job_id)
-        if not path.is_file():
-            raise KeyError(f"unknown job: {job_id}")
-        return json.loads(path.read_text(encoding="utf-8"))
+        with self._lock:
+            path = self.status_path(job_id)
+            if not path.is_file():
+                raise KeyError(f"unknown job: {job_id}")
+            status = json.loads(path.read_text(encoding="utf-8"))
+            if status.get("status") == "ready":
+                reason = self._source_change_reason(job_id)
+                if reason:
+                    return self._mark_outdated(status, reason)
+            return status
+
+    def refresh_freshness(self, fingerprint_for_request=None) -> None:
+        """Invalidate changed inputs while retaining the last verified artifact."""
+
+        with self._lock:
+            for status in self._statuses():
+                if status.get("status") not in ACTIVE_OR_REUSABLE:
+                    continue
+                reason = self._source_change_reason(status["job_id"])
+                if not reason and fingerprint_for_request is not None:
+                    try:
+                        fingerprint = fingerprint_for_request(self.read_request(status["job_id"]))
+                        if fingerprint != status["fingerprint"]:
+                            reason = "Reading subject or indexed dossier facts changed"
+                    except (OSError, ValueError, KeyError) as exc:
+                        reason = f"Refinement inputs are unavailable: {exc}"
+                if status["status"] == "ready":
+                    if reason:
+                        self._mark_outdated(status, reason)
+                elif reason or fingerprint_for_request is not None:
+                    if reason != status.get("input_stale_reason", ""):
+                        self._set_status(status, status["status"], status["stage"],
+                                         input_stale_reason=reason)
+
+    def _source_change_reason(self, job_id: str) -> str:
+        try:
+            hashes = self.read_request(job_id)["dossier"]["source_hashes"]
+            for relative, expected in hashes.items():
+                path = (self.project_root / relative).resolve()
+                path.relative_to(self.project_root)
+                if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                    return f"Source changed: {relative}"
+        except (OSError, ValueError, KeyError) as exc:
+            return f"Refinement inputs are unavailable: {exc}"
+        return ""
+
+    def _mark_outdated(self, status: dict[str, Any], reason: str) -> dict[str, Any]:
+        return self._set_status(
+            status, "stale", "outdated", stale_reason=reason[:1000], artifact_available=False,
+            fallback_artifact_available=True, fallback_artifact_url=status["artifact_url"],
+            fallback_job_id=status["job_id"],
+        )
 
     def latest_status(self, subject_id: str) -> dict[str, Any]:
         """Return the newest visible job for restoring browser state after reload."""
 
+        with self._lock:
+            self.refresh_freshness()
+            return self._latest_status(subject_id)
+
+    def _latest_status(self, subject_id: str) -> dict[str, Any]:
+
         matches = [
             status for status in self._statuses()
             if status.get("subject_id") == subject_id
-            and status.get("status") not in {"cancelled", "stale"}
+            and status.get("status") != "cancelled" and status.get("stage") != "replaced"
         ]
         if not matches:
             raise KeyError(f"no refinement exists for subject: {subject_id}")
         active = [status for status in matches if status.get("status") in ACTIVE | {"pending"}]
         if active:
             return max(active, key=lambda status: (status.get("created_at", ""), status["job_id"]))
-        ready = [status for status in matches if status.get("status") == "ready"]
+        ready = [status for status in matches
+                 if status.get("status") == "ready" or status.get("stage") == "outdated"]
         latest = max(matches, key=lambda status: (status.get("created_at", ""), status["job_id"]))
         if latest.get("status") == "failed" and ready:
             fallback = max(
@@ -174,10 +232,12 @@ class JobStore:
     def pending(self) -> list[dict[str, Any]]:
         """Return durable pending work in creation order for recovering Agents."""
 
-        return sorted(
-            (status for status in self._statuses() if status.get("status") == "pending"),
-            key=lambda status: (status.get("created_at", ""), status.get("job_id", "")),
-        )
+        with self._lock:
+            self._recover_abandoned_claim()
+            return sorted(
+                (status for status in self._statuses() if status.get("status") == "pending"),
+                key=lambda status: (status.get("created_at", ""), status.get("job_id", "")),
+            )
 
     def read_request(self, job_id: str) -> dict[str, Any]:
         path = self.request_path(job_id)
@@ -187,6 +247,7 @@ class JobStore:
 
     def claim(self, job_id: str, *, agent_id: str) -> dict[str, Any]:
         with self._lock:
+            self._recover_abandoned_claim()
             self._acquire_active_claim(job_id, agent_id)
             try:
                 status = self.get_status(job_id)
@@ -245,6 +306,8 @@ class JobStore:
                 status = self.get_status(job_id)
                 if status["status"] != "validating":
                     raise ValueError("job must be validating before accepting a result")
+                if status.get("input_stale_reason"):
+                    raise ValueError(status["input_stale_reason"])
                 result_path = self.job_dir(job_id) / "result.json"
                 if not result_path.is_file():
                     raise ValueError("missing result metadata")
@@ -294,6 +357,9 @@ class JobStore:
                     raise ValueError("Archify Architecture delivery has validation findings")
                 self._verify_file_claim(specification, delivery.get("specification"), "specification")
                 self._verify_file_claim(artifact, delivery.get("artifact"), "artifact")
+                changed = self._source_change_reason(job_id)
+                if changed:
+                    raise ValueError(changed)
 
                 current_dir = self._current_dir(status["subject_id"])
                 current_dir.mkdir(parents=True, exist_ok=True)
@@ -325,7 +391,7 @@ class JobStore:
                     if (
                         previous.get("job_id") != job_id
                         and previous.get("subject_id") == status["subject_id"]
-                        and previous.get("status") == "ready"
+                        and (previous.get("status") == "ready" or previous.get("stage") == "outdated")
                     ):
                         self._set_status(
                             previous,
@@ -333,6 +399,7 @@ class JobStore:
                             "replaced",
                             stale_reason=f"replaced by {job_id}",
                             artifact_available=False,
+                            fallback_artifact_available=False,
                         )
                 self._release_active_claim(job_id)
                 return ready
@@ -347,7 +414,10 @@ class JobStore:
 
     def artifact_path(self, job_id: str) -> Path:
         status = self.get_status(job_id)
-        if status.get("status") != "ready" or status.get("artifact_available") is not True:
+        if not (
+            status.get("status") == "ready" and status.get("artifact_available") is True
+            or status.get("status") == "stale" and status.get("stage") == "outdated"
+        ):
             raise KeyError("artifact is not registered as ready")
         path = self._validated_current_artifact_path(status)
         if not path.is_file():
@@ -382,6 +452,7 @@ class JobStore:
     def _validate_specification_binding(
         request: dict[str, Any], specification: Any, reverse_map: Any
     ) -> None:
+        validate_architecture_shape(specification, reverse_map)
         if not isinstance(specification, dict) or specification.get("diagram_type") != "architecture":
             raise ValueError("specification is not an Architecture diagram")
         if not isinstance(reverse_map, dict) or not all(
@@ -403,6 +474,15 @@ class JobStore:
         }
         if not set(reverse_map.values()) <= evidence_ids:
             raise ValueError("reverse ID map contains topology outside the request dossier")
+        evidence_edges = {
+            (edge["source"], edge["target"])
+            for group in ("internal", "boundary", "external_context", "critical_path_candidates")
+            for edge in (dossier.get("relationships") or {}).get(group, [])
+            if edge.get("origin") in {"parser", "runtime"}
+        }
+        for connection in specification.get("connections", []):
+            if (reverse_map.get(connection["from"]), reverse_map.get(connection["to"])) not in evidence_edges:
+                raise ValueError("Architecture connection has no parser/runtime topology evidence")
 
     def _find_reusable(self, subject_id: str, fingerprint: str) -> dict[str, Any] | None:
         if not self.root.is_dir():
@@ -476,7 +556,8 @@ class JobStore:
 
     def _acquire_active_claim(self, job_id: str, agent_id: str) -> None:
         payload = json.dumps(
-            {"job_id": job_id, "agent_id": agent_id, "claimed_at": _now()},
+            {"job_id": job_id, "agent_id": agent_id, "claimed_at": _now(),
+             "pid": os.getpid(), "process_identity": process_identity(os.getpid())},
             ensure_ascii=False,
             sort_keys=True,
         ).encode("utf-8")
@@ -491,6 +572,30 @@ class JobStore:
             os.write(descriptor, payload)
         finally:
             os.close(descriptor)
+
+    def _recover_abandoned_claim(self) -> None:
+        """Recover only a positively identified exited/replaced local process."""
+
+        try:
+            claim = json.loads(self._active_claim_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        pid = claim.get("pid")
+        if not isinstance(pid, int) or pid <= 0:
+            return  # Legacy claims have no safe liveness evidence.
+        identity = process_identity(pid)
+        if identity == "unknown" or (
+            identity is not None and claim.get("process_identity") in {identity, "unknown", None}
+        ):
+            return
+        try:
+            status = self.get_status(claim["job_id"])
+        except KeyError:
+            status = None
+        if status and status.get("status") in ACTIVE:
+            self._set_status(status, "failed", "interrupted", artifact_available=False,
+                             diagnostic="The claiming Agent process exited; retry this deep read.")
+        self._active_claim_path.unlink()
 
     def _release_active_claim(self, job_id: str) -> None:
         try:

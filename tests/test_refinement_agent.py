@@ -31,7 +31,7 @@ def _dossier(project: Path, subject_id: str = "pkg/api") -> dict:
             "locked": False,
         },
         "source_scope": {"owned_files": ["pkg/api.py"]},
-        "source_hashes": {"pkg/api.py": "fixture"},
+        "source_hashes": {"pkg/api.py": hashlib.sha256(source.read_bytes()).hexdigest()},
         "nodes": {
             "internal": [
                 {
